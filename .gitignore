@@ -1,0 +1,6 @@
+*.zip
+*.docx
+target/
+.classpath
+.project
+.settings/
