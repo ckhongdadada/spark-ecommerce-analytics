@@ -80,9 +80,10 @@ object Module1_DataPreprocessing extends Logging {
       .reduceByKey(_ + _)
       .sortBy(_._2, ascending = false)
       .take(10)
-      .foreach { case (uid, cnt) => logger.info(s"  $uid -> $cnt次") }
+      .foreach { case (uid, cnt) => logger.info(s"  $uid -> ${cnt}次") }
 
     // ── Step 6：保存清洗结果（saveAsTextFile）──
+    overwriteOutput(AppConfig.CLEAN_OUTPUT_PATH)
     cleanRDD
       .map(b => s"${b.userId},${b.itemId},${b.category},${b.behavior},${b.hour},${b.dayOfWeek},${b.isWeekend}")
       .saveAsTextFile(AppConfig.CLEAN_OUTPUT_PATH)
@@ -101,5 +102,21 @@ object Module1_DataPreprocessing extends Logging {
     categoryBroadcast.unpersist()
 
     logger.info("模块一执行完毕 ✓")
+  }
+
+  private def overwriteOutput(path: String): Unit = {
+    val outputDir = new java.io.File(path)
+    if (outputDir.exists()) {
+      logger.warn(s"输出路径已存在，先删除旧结果: $path")
+      deleteRecursively(outputDir)
+    }
+  }
+
+  private def deleteRecursively(file: java.io.File): Unit = {
+    if (file.isDirectory) {
+      val children = file.listFiles()
+      if (children != null) children.foreach(deleteRecursively)
+    }
+    file.delete()
   }
 }

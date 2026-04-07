@@ -6,7 +6,6 @@ import com.ecommerce.util.Logging
 import org.apache.spark.graphx._
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
-import org.apache.spark.util.Utils
 
 /**
  * ══════════════════════════════════════════════════════════
@@ -19,15 +18,11 @@ import org.apache.spark.util.Utils
  * ══════════════════════════════════════════════════════════
  *
  * 图建模思路：
- *   节点 = 用户（userId → Murmur3Hash → Long）
+ *   节点 = 用户（distinct userId → zipWithUniqueId → Long）
  *   边   = 两用户共同购买过同一类目商品 → 形成潜在社交关系
  *   边权 = 共同购买类目数量
  */
 object Module4_GraphX extends Logging {
-
-  def userIdToVertexId(userId: String): VertexId = {
-    Utils.nonNegativeHash(userId)
-  }
 
   def run(): Unit = {
     logger.info("=" * 60)
@@ -35,7 +30,6 @@ object Module4_GraphX extends Logging {
     logger.info("=" * 60)
 
     val spark = SparkSessionFactory.getSession()
-    val sc    = spark.sparkContext
     import spark.implicits._
 
     // ── Step 1：读取数据，提取用户-类目购买关系 ──
@@ -48,32 +42,39 @@ object Module4_GraphX extends Logging {
       .select("userId", "category")
       .distinct()
 
-    // ── Step 2：构建节点 RDD（使用 Murmur3Hash 避免冲突）──
-    val userIds: RDD[(Long, String)] = rawDF
+    // ── Step 2：构建节点 RDD（为每个用户分配唯一顶点 ID）──
+    val userIdToVertexIdRDD: RDD[(String, VertexId)] = rawDF
       .select("userId").distinct()
       .rdd
       .map(row => row.getString(0))
-      .map(uid => (userIdToVertexId(uid), uid))
+      .zipWithUniqueId()
+      .map { case (uid, vertexId) => (uid, vertexId) }
+      .persist(StorageLevel.MEMORY_ONLY)
 
-    val vertices: RDD[(VertexId, String)] = userIds.persist(StorageLevel.MEMORY_ONLY)
+    val vertices: RDD[(VertexId, String)] = userIdToVertexIdRDD
+      .map { case (uid, vertexId) => (vertexId, uid) }
+      .persist(StorageLevel.MEMORY_ONLY)
 
     // ── Step 3：构建边 RDD（共同购买同类目的用户对）──
     // 自连接：同一类目的购买用户两两配对
     val categoryBuyersRDD = buyDF.rdd
-      .map(row => (row.getString(1), row.getString(0)))  // (category, userId)
+      .map(row => (row.getString(0), row.getString(1)))  // (userId, category)
+      .join(userIdToVertexIdRDD)
+      .map { case (userId, (category, vertexId)) => (category, (userId, vertexId)) }
       .groupByKey()
+      .mapValues(_.toList.distinct)
       .filter(_._2.size > 1)   // 至少两人购买同类目
 
     val edgesRDD: RDD[Edge[Double]] = categoryBuyersRDD.flatMap { case (_, users) =>
-      val userList = users.toList
+      val vertexIds = users.map(_._2)
       for {
-        i <- userList.indices
-        j <- (i + 1) until userList.size
-      } yield Edge(
-        userIdToVertexId(userList(i)),
-        userIdToVertexId(userList(j)),
-        1.0
-      )
+        i <- vertexIds.indices
+        j <- (i + 1) until vertexIds.size
+      } yield {
+        val srcId = math.min(vertexIds(i), vertexIds(j))
+        val dstId = math.max(vertexIds(i), vertexIds(j))
+        Edge(srcId, dstId, 1.0)
+      }
     }
 
     // 合并重复边（累加权重）
@@ -125,6 +126,7 @@ object Module4_GraphX extends Logging {
       .foreach { case (uid, deg) => logger.info(s"  $uid -> 出度 $deg") }
 
     // ── 清理缓存 ──
+    userIdToVertexIdRDD.unpersist()
     vertices.unpersist()
     mergedEdges.unpersist()
     graph.unpersist()

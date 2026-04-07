@@ -64,14 +64,14 @@ object Main extends Logging {
           Module6_PerformanceTuning.run()
 
         case "all" | _ =>
-          logger.info("运行全部模块...")
+          logger.info("运行全部批处理模块（默认不包含需要常驻运行的 Streaming 模块）...")
           Module1_DataPreprocessing.run()
           Module2_SparkSQL.run()
           // Module3_Streaming.run()   // Streaming 需要持续运行，默认注释
           Module4_GraphX.run()
           Module5_MLlib.run()
           Module6_PerformanceTuning.run()
-          logger.info("全部模块执行完毕 🎉")
+          logger.info("全部批处理模块执行完毕 🎉")
       }
     } finally {
       SparkSessionFactory.stop()

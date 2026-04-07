@@ -1,0 +1,4 @@
+.build-env/
+target/
+spark-warehouse/
+*.log

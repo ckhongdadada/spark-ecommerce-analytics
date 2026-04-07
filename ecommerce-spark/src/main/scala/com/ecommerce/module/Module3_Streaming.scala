@@ -5,6 +5,7 @@ import com.ecommerce.core.SparkSessionFactory
 import com.ecommerce.util.Logging
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.streaming.Trigger
+import org.apache.spark.sql.types.{LongType, StringType, StructField, StructType}
 
 /**
  * ══════════════════════════════════════════════════════════
@@ -43,11 +44,15 @@ object Module3_Streaming extends Logging {
       .option("kafka.bootstrap.servers", AppConfig.KAFKA_BROKERS)
       .option("subscribe", AppConfig.KAFKA_TOPIC)
       .option("startingOffsets", "latest")
-      .option("checkpointLocation", AppConfig.CHECKPOINT_PATH)
       .load()
 
     // 解析 JSON 消息：{"userId":"U1","itemId":"I1","behavior":"pv","timestamp":1700000000}
-    val schema = "userId STRING, itemId STRING, behavior STRING, timestamp LONG"
+    val schema = StructType(Seq(
+      StructField("userId", StringType, nullable = false),
+      StructField("itemId", StringType, nullable = false),
+      StructField("behavior", StringType, nullable = false),
+      StructField("timestamp", LongType, nullable = false)
+    ))
     val eventDF = rawStream
       .selectExpr("CAST(value AS STRING) as json_str")
       .select(from_json(col("json_str"), schema).alias("data"))
@@ -65,18 +70,20 @@ object Module3_Streaming extends Logging {
       )
       .agg(
         count("*").alias("pv"),
-        countDistinct("userId").alias("uv")
+        approx_count_distinct(col("userId")).alias("uv")
       )
 
     val query = windowedDF.writeStream
       .outputMode("update")
       .format("console")
       .option("truncate", "false")
+      .option("checkpointLocation", s"${AppConfig.CHECKPOINT_PATH}/kafka")
       .trigger(Trigger.ProcessingTime("10 seconds"))
       .start()
 
     logger.info("Streaming 任务已启动，等待数据... (Ctrl+C 停止)")
     query.awaitTermination(AppConfig.STREAM_TIMEOUT)
+    if (query.isActive) query.stop()
   }
 
   // ─────────────── B. Socket 数据源（本地调试）───────────────
@@ -109,14 +116,16 @@ object Module3_Streaming extends Logging {
         window(col("event_time"), "1 minute", "30 seconds"),
         col("behavior")
       )
-      .agg(count("*").as("pv"), countDistinct("userId").as("uv"))
+      .agg(count("*").as("pv"), approx_count_distinct(col("userId")).as("uv"))
       .writeStream
       .outputMode("complete")
       .format("console")
       .option("numRows", 20)
+      .option("checkpointLocation", s"${AppConfig.CHECKPOINT_PATH}/socket")
       .start()
 
     pvuvQuery.awaitTermination(AppConfig.STREAM_TIMEOUT * 2)
+    if (pvuvQuery.isActive) pvuvQuery.stop()
     logger.info("模块三执行完毕 ✓")
   }
 }

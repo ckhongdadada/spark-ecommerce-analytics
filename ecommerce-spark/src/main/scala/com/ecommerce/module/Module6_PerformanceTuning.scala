@@ -41,18 +41,18 @@ object Module6_PerformanceTuning extends Logging {
 
     val buyDF = rawDF.filter($"behavior" === "buy")
 
-    // MEMORY_ONLY：默认cache，内存不足则重算
+    // MEMORY_ONLY：预热后多次访问，观察稳定时延
     buyDF.persist(StorageLevel.MEMORY_ONLY)
-    val t0 = System.currentTimeMillis()
     val c1 = buyDF.count()
-    logger.info(f"  MEMORY_ONLY     count=$c1%,d  耗时=${System.currentTimeMillis()-t0}ms")
+    val memoryOnlySamples = measureRepeated(3) { buyDF.count() }
+    logger.info(s"  MEMORY_ONLY     count=$c1  平均耗时=${average(memoryOnlySamples)}ms  样本=${memoryOnlySamples.mkString("[", ", ", "]")}")
 
-    // MEMORY_AND_DISK：溢出到磁盘
+    // MEMORY_AND_DISK：同样预热后多次访问
     buyDF.unpersist()
     buyDF.persist(StorageLevel.MEMORY_AND_DISK)
-    val t1 = System.currentTimeMillis()
     val c2 = buyDF.count()
-    logger.info(f"  MEMORY_AND_DISK count=$c2%,d  耗时=${System.currentTimeMillis()-t1}ms")
+    val memoryAndDiskSamples = measureRepeated(3) { buyDF.count() }
+    logger.info(s"  MEMORY_AND_DISK count=$c2  平均耗时=${average(memoryAndDiskSamples)}ms  样本=${memoryAndDiskSamples.mkString("[", ", ", "]")}")
 
     buyDF.unpersist()
 
@@ -65,15 +65,22 @@ object Module6_PerformanceTuning extends Logging {
     val discountMap = Map("Electronics"->0.9, "Clothing"->0.8,
                           "Food"->0.95, "Books"->0.85, "Sports"->0.88, "Beauty"->0.75)
     val broadcastDiscount = sc.broadcast(discountMap)
+    val discountDimDF = discountMap.toSeq.toDF("category", "discount")
 
-    // 直接利用广播变量，避免 Shuffle
+    val regularJoinSamples = measureRepeated(3) {
+      rawDF.join(discountDimDF, Seq("category"), "left").count()
+    }
+    logger.info(s"  普通 Join      平均耗时=${average(regularJoinSamples)}ms  样本=${regularJoinSamples.mkString("[", ", ", "]")}")
+
+    // 显式广播小表，避免 Shuffle
     val discountDF = rawDF.map { row =>
       val cat      = row.getAs[String]("category")
       val discount = broadcastDiscount.value.getOrElse(cat, 1.0)
       (row.getAs[String]("userId"), cat, discount)
     }.toDF("userId", "category", "discount")
 
-    logger.info(s"  广播Join结果行数: ${discountDF.count()}")
+    val broadcastJoinSamples = measureRepeated(3) { discountDF.count() }
+    logger.info(s"  广播 Join      平均耗时=${average(broadcastJoinSamples)}ms  样本=${broadcastJoinSamples.mkString("[", ", ", "]")}")
 
     // ──────────────────────────────────────────────────────
     // 知识点 3：分区优化
@@ -109,8 +116,10 @@ object Module6_PerformanceTuning extends Logging {
       .withColumn("salt", explode(array((0 until SALT).map(lit(_)): _*)))
       .withColumn("salted_key", concat($"category", lit("_"), $"salt"))
 
-    val skewJoinResult = saltedLeft.join(saltedRight, "salted_key")
-    logger.info(s"  加盐Join结果行数: ${skewJoinResult.count()}")
+    val skewedJoinSamples = measureRepeated(3) {
+      saltedLeft.join(saltedRight, "salted_key").count()
+    }
+    logger.info(s"  加盐 Join      平均耗时=${average(skewedJoinSamples)}ms  样本=${skewedJoinSamples.mkString("[", ", ", "]")}")
 
     // ──────────────────────────────────────────────────────
     // 知识点 5：执行计划分析
@@ -125,6 +134,19 @@ object Module6_PerformanceTuning extends Logging {
     logger.info("  --- 逻辑计划 ---")
     analyzedDF.explain(mode = "formatted")  // 输出完整执行计划
 
+    broadcastDiscount.unpersist()
     logger.info("模块六执行完毕 ✓")
+  }
+
+  private def measureRepeated(runs: Int)(action: => Long): Seq[Long] = {
+    (1 to runs).map { _ =>
+      val startedAt = System.currentTimeMillis()
+      action
+      System.currentTimeMillis() - startedAt
+    }
+  }
+
+  private def average(samples: Seq[Long]): Long = {
+    if (samples.isEmpty) 0L else samples.sum / samples.size
   }
 }

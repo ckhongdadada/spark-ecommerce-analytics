@@ -34,6 +34,7 @@ object SparkSessionFactory {
       .setAppName(AppConfig.APP_NAME)
       .setMaster(AppConfig.MASTER)
       // ── 第4章 性能调优相关配置 ──
+      .set("spark.sql.session.timeZone",      AppConfig.TIMEZONE)
       .set("spark.serializer",               AppConfig.SERIALIZER)
       .set("spark.sql.shuffle.partitions",   AppConfig.SHUFFLE_PARTITIONS.toString)
       .set("spark.default.parallelism",      AppConfig.DEFAULT_PARALLELISM.toString)
@@ -43,6 +44,7 @@ object SparkSessionFactory {
            (AppConfig.BROADCAST_THRESHOLD_MB * 1024 * 1024).toString)
       .set("spark.sql.adaptive.enabled",     "true")
       .set("spark.sql.adaptive.coalescePartitions.enabled", "true")
+      .set("spark.sql.adaptive.skewJoin.enabled", "true")
       // Kryo 注册（减少序列化开销）
       .registerKryoClasses(Array(
         classOf[UserBehaviorLog],
