@@ -2,3 +2,5 @@
 target/
 spark-warehouse/
 *.log
+data/
+output/

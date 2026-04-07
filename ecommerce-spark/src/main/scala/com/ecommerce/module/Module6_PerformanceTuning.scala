@@ -3,22 +3,47 @@ package com.ecommerce.module
 import com.ecommerce.config.AppConfig
 import com.ecommerce.core.SparkSessionFactory
 import com.ecommerce.util.Logging
+import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions._
 import org.apache.spark.storage.StorageLevel
 
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Path, Paths}
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+
 /**
- * ══════════════════════════════════════════════════════════
- * 模块六：性能调优（★ 原提纲遗漏的第4章核心内容）
- * 对应课程：第4章 Spark性能调优
- *   - 持久化策略（cache / persist / StorageLevel）
- *   - 广播变量（Broadcast Variable）
- *   - 分区优化（repartition / coalesce）
- *   - 数据倾斜处理（Skew Join）
- *   - Kryo 序列化
- *   - SQL 执行计划分析（explain）
- * ══════════════════════════════════════════════════════════
+ * 模块六：Spark 性能调优实战。
+ * 该模块会输出结构化 benchmark 结果，便于答辩时结合事件日志和 Spark UI 一起说明优化效果。
  */
 object Module6_PerformanceTuning extends Logging {
+
+  case class BenchmarkMeasurement(
+    scenario: String,
+    variant: String,
+    phase: String,
+    runId: Int,
+    durationMs: Long,
+    rowCount: Long,
+    partitionCount: Int,
+    recordedAt: String
+  )
+
+  case class BenchmarkSummary(
+    scenario: String,
+    variant: String,
+    measuredRuns: Int,
+    warmupRuns: Int,
+    rowCount: Long,
+    partitionCount: Int,
+    avgDurationMs: Long,
+    minDurationMs: Long,
+    medianDurationMs: Long,
+    p95DurationMs: Long,
+    maxDurationMs: Long
+  )
+
+  private val timestampFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
 
   def run(): Unit = {
     logger.info("=" * 60)
@@ -26,127 +51,264 @@ object Module6_PerformanceTuning extends Logging {
     logger.info("=" * 60)
 
     val spark = SparkSessionFactory.getSession()
-    val sc    = spark.sparkContext
     import spark.implicits._
 
     val rawDF = spark.read
       .option("header", "true")
       .option("inferSchema", "true")
       .csv(AppConfig.RAW_LOG_PATH)
+      .cache()
 
-    // ──────────────────────────────────────────────────────
-    // 知识点 1：持久化策略对比
-    // ──────────────────────────────────────────────────────
-    logger.info("持久化策略对比")
+    rawDF.count()
 
-    val buyDF = rawDF.filter($"behavior" === "buy")
+    val benchmarkReport = runBenchmarks(spark, rawDF)
+    persistBenchmarkReport(benchmarkReport)
 
-    // MEMORY_ONLY：预热后多次访问，观察稳定时延
-    buyDF.persist(StorageLevel.MEMORY_ONLY)
-    val c1 = buyDF.count()
-    val memoryOnlySamples = measureRepeated(3) { buyDF.count() }
-    logger.info(s"  MEMORY_ONLY     count=$c1  平均耗时=${average(memoryOnlySamples)}ms  样本=${memoryOnlySamples.mkString("[", ", ", "]")}")
+    logger.info(s"Benchmark 汇总结果已写入: ${AppConfig.BENCHMARK_OUTPUT_PATH}")
+    benchmarkReport.summaries.foreach { summary =>
+      logger.info(
+        s"  ${summary.scenario} / ${summary.variant}: " +
+          s"avg=${summary.avgDurationMs}ms, p95=${summary.p95DurationMs}ms, " +
+          s"runs=${summary.measuredRuns}, rows=${summary.rowCount}"
+      )
+    }
 
-    // MEMORY_AND_DISK：同样预热后多次访问
-    buyDF.unpersist()
-    buyDF.persist(StorageLevel.MEMORY_AND_DISK)
-    val c2 = buyDF.count()
-    val memoryAndDiskSamples = measureRepeated(3) { buyDF.count() }
-    logger.info(s"  MEMORY_AND_DISK count=$c2  平均耗时=${average(memoryAndDiskSamples)}ms  样本=${memoryAndDiskSamples.mkString("[", ", ", "]")}")
+    logger.info(s"Spark 事件日志目录: ${AppConfig.EVENT_LOG_DIR}")
+    rawDF.unpersist()
+    logger.info("模块六执行完毕")
+  }
 
-    buyDF.unpersist()
+  case class BenchmarkReport(
+    measurements: Seq[BenchmarkMeasurement],
+    summaries: Seq[BenchmarkSummary],
+    explainPlan: String
+  )
 
-    // ──────────────────────────────────────────────────────
-    // 知识点 2：广播变量（避免大表 Shuffle Join）
-    // ──────────────────────────────────────────────────────
-    logger.info("广播变量 vs 普通 Join")
+  private[module] def runBenchmarks(spark: SparkSession, rawDF: DataFrame): BenchmarkReport = {
+    import spark.implicits._
 
-    // 小表：类目折扣映射
-    val discountMap = Map("Electronics"->0.9, "Clothing"->0.8,
-                          "Food"->0.95, "Books"->0.85, "Sports"->0.88, "Beauty"->0.75)
-    val broadcastDiscount = sc.broadcast(discountMap)
+    val buyDFMemoryOnly = rawDF.filter($"behavior" === "buy").persist(StorageLevel.MEMORY_ONLY)
+    val buyDFMemoryAndDisk = rawDF.filter($"behavior" === "buy").persist(StorageLevel.MEMORY_AND_DISK)
+    val discountMap = Map(
+      "Electronics" -> 0.90,
+      "Clothing" -> 0.80,
+      "Food" -> 0.95,
+      "Books" -> 0.85,
+      "Sports" -> 0.88,
+      "Beauty" -> 0.75
+    )
     val discountDimDF = discountMap.toSeq.toDF("category", "discount")
 
-    val regularJoinSamples = measureRepeated(3) {
-      rawDF.join(discountDimDF, Seq("category"), "left").count()
-    }
-    logger.info(s"  普通 Join      平均耗时=${average(regularJoinSamples)}ms  样本=${regularJoinSamples.mkString("[", ", ", "]")}")
+    val measurements = Seq(
+      benchmarkScenario("cache_strategy", "memory_only", buyDFMemoryOnly, _.count()),
+      benchmarkScenario("cache_strategy", "memory_and_disk", buyDFMemoryAndDisk, _.count()),
+      benchmarkScenario("join_strategy", "regular_join", rawDF.join(discountDimDF, Seq("category"), "left"), _.count()),
+      benchmarkScenario("join_strategy", "broadcast_join", rawDF.join(broadcast(discountDimDF), Seq("category"), "left"), _.count()),
+      benchmarkScenario("partition_strategy", "default_partitions", rawDF, _.groupBy("category").count().count()),
+      benchmarkScenario("partition_strategy", "repartitioned", rawDF.repartition(AppConfig.DEFAULT_PARALLELISM), _.groupBy("category").count().count()),
+      benchmarkScenario("skew_strategy", "regular_key_join", buildSkewedFact(rawDF), _.join(buildSkewedDim(spark), Seq("join_key"), "inner").count()),
+      benchmarkScenario("skew_strategy", "salted_join", buildSaltedFact(rawDF), _.join(buildSaltedDim(spark), Seq("join_key"), "inner").count())
+    ).flatten
 
-    // 显式广播小表，避免 Shuffle
-    val discountDF = rawDF.map { row =>
-      val cat      = row.getAs[String]("category")
-      val discount = broadcastDiscount.value.getOrElse(cat, 1.0)
-      (row.getAs[String]("userId"), cat, discount)
-    }.toDF("userId", "category", "discount")
+    buyDFMemoryOnly.unpersist(blocking = false)
+    buyDFMemoryAndDisk.unpersist(blocking = false)
 
-    val broadcastJoinSamples = measureRepeated(3) { discountDF.count() }
-    logger.info(s"  广播 Join      平均耗时=${average(broadcastJoinSamples)}ms  样本=${broadcastJoinSamples.mkString("[", ", ", "]")}")
-
-    // ──────────────────────────────────────────────────────
-    // 知识点 3：分区优化
-    // ──────────────────────────────────────────────────────
-    logger.info("分区数优化")
-
-    val defaultParts = rawDF.rdd.getNumPartitions
-    logger.info(s"  默认分区数: $defaultParts")
-
-    // 增大分区（适合大数据集并行计算）
-    val repartitioned = rawDF.repartition(AppConfig.DEFAULT_PARALLELISM)
-    logger.info(s"  repartition后: ${repartitioned.rdd.getNumPartitions}")
-
-    // 减小分区（写出前合并，避免小文件）
-    val coalesced = rawDF.coalesce(1)
-    logger.info(s"  coalesce(1)后: ${coalesced.rdd.getNumPartitions} （写出前合并小文件）")
-
-    // ──────────────────────────────────────────────────────
-    // 知识点 4：数据倾斜处理（Skew Join 加盐法）
-    // ──────────────────────────────────────────────────────
-    logger.info("数据倾斜处理（加盐法 Salt）")
-
-    val SALT = 10  // 盐粒数，根据倾斜程度调整
-
-    // 左表：为热点 Key 加随机盐
-    val saltedLeft = rawDF
-      .withColumn("salt", (rand() * SALT).cast("int"))
-      .withColumn("salted_key", concat($"category", lit("_"), $"salt"))
-
-    // 右表：炸开盐（每个 Key 复制 SALT 份）
-    val categoryRef = rawDF.select("category").distinct()
-    val saltedRight = categoryRef
-      .withColumn("salt", explode(array((0 until SALT).map(lit(_)): _*)))
-      .withColumn("salted_key", concat($"category", lit("_"), $"salt"))
-
-    val skewedJoinSamples = measureRepeated(3) {
-      saltedLeft.join(saltedRight, "salted_key").count()
-    }
-    logger.info(s"  加盐 Join      平均耗时=${average(skewedJoinSamples)}ms  样本=${skewedJoinSamples.mkString("[", ", ", "]")}")
-
-    // ──────────────────────────────────────────────────────
-    // 知识点 5：执行计划分析
-    // ──────────────────────────────────────────────────────
-    logger.info("SQL 执行计划（explain）")
-
-    val analyzedDF = rawDF
+    val explainPlan = rawDF
       .groupBy("category")
       .agg(count("*").alias("cnt"))
       .orderBy(desc("cnt"))
+      .queryExecution
+      .executedPlan
+      .toString()
 
-    logger.info("  --- 逻辑计划 ---")
-    analyzedDF.explain(mode = "formatted")  // 输出完整执行计划
-
-    broadcastDiscount.unpersist()
-    logger.info("模块六执行完毕 ✓")
+    val summaries = summarizeMeasurements(measurements)
+    BenchmarkReport(measurements, summaries, explainPlan)
   }
 
-  private def measureRepeated(runs: Int)(action: => Long): Seq[Long] = {
-    (1 to runs).map { _ =>
-      val startedAt = System.currentTimeMillis()
-      action
-      System.currentTimeMillis() - startedAt
+  private def benchmarkScenario(
+    scenario: String,
+    variant: String,
+    df: DataFrame,
+    action: DataFrame => Long
+  ): Seq[BenchmarkMeasurement] = {
+    val warmupRuns = AppConfig.BENCHMARK_WARMUP_RUNS
+    val measuredRuns = AppConfig.BENCHMARK_MEASURED_RUNS
+
+    val warmupSamples = (1 to warmupRuns).map { runId =>
+      measure(df, scenario, variant, "warmup", runId, action)
+    }
+
+    val measuredSamples = (1 to measuredRuns).map { runId =>
+      measure(df, scenario, variant, "measured", runId, action)
+    }
+
+    warmupSamples ++ measuredSamples
+  }
+
+  private def measure(
+    df: DataFrame,
+    scenario: String,
+    variant: String,
+    phase: String,
+    runId: Int,
+    action: DataFrame => Long
+  ): BenchmarkMeasurement = {
+    val startedAt = System.currentTimeMillis()
+    val rowCount = action(df)
+    val durationMs = System.currentTimeMillis() - startedAt
+
+    BenchmarkMeasurement(
+      scenario = scenario,
+      variant = variant,
+      phase = phase,
+      runId = runId,
+      durationMs = durationMs,
+      rowCount = rowCount,
+      partitionCount = df.rdd.getNumPartitions,
+      recordedAt = LocalDateTime.now().format(timestampFormatter)
+    )
+  }
+
+  private[module] def summarizeMeasurements(measurements: Seq[BenchmarkMeasurement]): Seq[BenchmarkSummary] = {
+    measurements
+      .filter(_.phase == "measured")
+      .groupBy(m => (m.scenario, m.variant))
+      .toSeq
+      .sortBy { case ((scenario, variant), _) => (scenario, variant) }
+      .map { case ((scenario, variant), samples) =>
+        val durations = samples.map(_.durationMs)
+        BenchmarkSummary(
+          scenario = scenario,
+          variant = variant,
+          measuredRuns = samples.size,
+          warmupRuns = AppConfig.BENCHMARK_WARMUP_RUNS,
+          rowCount = samples.headOption.map(_.rowCount).getOrElse(0L),
+          partitionCount = samples.headOption.map(_.partitionCount).getOrElse(0),
+          avgDurationMs = durations.sum / math.max(1, durations.size),
+          minDurationMs = durations.min,
+          medianDurationMs = percentile(durations, 0.5),
+          p95DurationMs = percentile(durations, 0.95),
+          maxDurationMs = durations.max
+        )
+      }
+  }
+
+  private[module] def percentile(samples: Seq[Long], p: Double): Long = {
+    if (samples.isEmpty) {
+      0L
+    } else {
+      val sorted = samples.sorted
+      val index = math.ceil(sorted.size * p).toInt - 1
+      sorted(index.max(0).min(sorted.size - 1))
     }
   }
 
-  private def average(samples: Seq[Long]): Long = {
-    if (samples.isEmpty) 0L else samples.sum / samples.size
+  private def buildSkewedFact(rawDF: DataFrame): DataFrame = {
+    rawDF.withColumn(
+      "join_key",
+      when(col("category") === "Electronics", lit("hot_category")).otherwise(col("category"))
+    )
+  }
+
+  private def buildSkewedDim(spark: SparkSession): DataFrame = {
+    import spark.implicits._
+    Seq(
+      ("hot_category", "high traffic category"),
+      ("Clothing", "fashion category"),
+      ("Food", "daily category"),
+      ("Books", "content category"),
+      ("Sports", "fitness category"),
+      ("Beauty", "personal care category")
+    ).toDF("join_key", "tag")
+  }
+
+  private def buildSaltedFact(rawDF: DataFrame): DataFrame = {
+    val saltBucketCount = 8
+    rawDF
+      .withColumn(
+        "base_key",
+        when(col("category") === "Electronics", lit("hot_category")).otherwise(col("category"))
+      )
+      .withColumn("salt", (rand(42) * saltBucketCount).cast("int"))
+      .withColumn("join_key", concat(col("base_key"), lit("_"), col("salt")))
+  }
+
+  private def buildSaltedDim(spark: SparkSession): DataFrame = {
+    import spark.implicits._
+    val keys = Seq("hot_category", "Clothing", "Food", "Books", "Sports", "Beauty")
+    val saltBucketCount = 8
+    keys
+      .flatMap(key => (0 until saltBucketCount).map(salt => (s"${key}_$salt", key)))
+      .toDF("join_key", "base_key")
+  }
+
+  private def persistBenchmarkReport(report: BenchmarkReport): Unit = {
+    val basePath = Paths.get(AppConfig.BENCHMARK_OUTPUT_PATH)
+    Files.createDirectories(basePath)
+
+    writeTextFile(basePath.resolve("measurements.csv"), measurementCsv(report.measurements))
+    writeTextFile(basePath.resolve("summaries.csv"), summaryCsv(report.summaries))
+    writeTextFile(basePath.resolve("explain_plan.txt"), report.explainPlan)
+    writeTextFile(basePath.resolve("README.txt"), benchmarkReadme(basePath))
+  }
+
+  private def writeTextFile(path: Path, content: String): Unit = {
+    Files.createDirectories(path.getParent)
+    Files.write(path, content.getBytes(StandardCharsets.UTF_8))
+  }
+
+  private def benchmarkReadme(basePath: Path): String = {
+    s"""性能基准结果说明
+       |====================
+       |1. measurements.csv 保存每一次 warmup / measured 运行的耗时记录。
+       |2. summaries.csv 保存每个实验场景的聚合统计结果。
+       |3. explain_plan.txt 保存模块六使用的执行计划文本。
+       |4. Spark 事件日志写入 ${Paths.get(AppConfig.EVENT_LOG_DIR).toAbsolutePath}，可配合 Spark History Server 或 Spark UI 进一步分析。
+       |
+       |当前输出目录: ${basePath.toAbsolutePath}
+       |""".stripMargin
+  }
+
+  private def measurementCsv(rows: Seq[BenchmarkMeasurement]): String = {
+    val header = "scenario,variant,phase,run_id,duration_ms,row_count,partition_count,recorded_at"
+    val body = rows.map { row =>
+      Seq(
+        row.scenario,
+        row.variant,
+        row.phase,
+        row.runId.toString,
+        row.durationMs.toString,
+        row.rowCount.toString,
+        row.partitionCount.toString,
+        row.recordedAt
+      ).map(csvEscape).mkString(",")
+    }
+
+    (header +: body).mkString(System.lineSeparator())
+  }
+
+  private def summaryCsv(rows: Seq[BenchmarkSummary]): String = {
+    val header = "scenario,variant,measured_runs,warmup_runs,row_count,partition_count,avg_duration_ms,min_duration_ms,median_duration_ms,p95_duration_ms,max_duration_ms"
+    val body = rows.map { row =>
+      Seq(
+        row.scenario,
+        row.variant,
+        row.measuredRuns.toString,
+        row.warmupRuns.toString,
+        row.rowCount.toString,
+        row.partitionCount.toString,
+        row.avgDurationMs.toString,
+        row.minDurationMs.toString,
+        row.medianDurationMs.toString,
+        row.p95DurationMs.toString,
+        row.maxDurationMs.toString
+      ).map(csvEscape).mkString(",")
+    }
+
+    (header +: body).mkString(System.lineSeparator())
+  }
+
+  private def csvEscape(value: String): String = {
+    "\"" + value.replace("\"", "\"\"") + "\""
   }
 }

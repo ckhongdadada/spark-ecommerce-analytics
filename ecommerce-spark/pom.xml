@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
-         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.ecommerce</groupId>
@@ -11,7 +10,7 @@
     <packaging>jar</packaging>
 
     <name>电商全路径数据分析系统</name>
-    <description>Spark全栈期末大作业 —— 覆盖RDD/SQL/Streaming/GraphX/MLlib/性能调优</description>
+    <description>Spark 课程项目，覆盖 RDD、SQL、Streaming、GraphX、MLlib 和性能调优模块。</description>
 
     <properties>
         <maven.compiler.source>1.8</maven.compiler.source>
@@ -30,7 +29,7 @@
             <version>${scala.version}</version>
         </dependency>
 
-        <!-- Spark Core (RDD) -->
+        <!-- Spark Core -->
         <dependency>
             <groupId>org.apache.spark</groupId>
             <artifactId>spark-core_${scala.binary.version}</artifactId>
@@ -54,7 +53,7 @@
             <scope>provided</scope>
         </dependency>
 
-        <!-- Structured Streaming + Kafka -->
+        <!-- Structured Streaming Kafka -->
         <dependency>
             <groupId>org.apache.spark</groupId>
             <artifactId>spark-sql-kafka-0-10_${scala.binary.version}</artifactId>
@@ -77,26 +76,21 @@
             <scope>provided</scope>
         </dependency>
 
-        <!-- MySQL Connector (Spark SQL写出结果) -->
+        <!-- MySQL connector -->
         <dependency>
             <groupId>com.mysql</groupId>
             <artifactId>mysql-connector-j</artifactId>
             <version>8.0.33</version>
         </dependency>
 
-        <!-- 日志 -->
+        <!-- Logging API -->
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
             <version>1.7.36</version>
         </dependency>
-        <dependency>
-            <groupId>ch.qos.logback</groupId>
-            <artifactId>logback-classic</artifactId>
-            <version>1.2.12</version>
-        </dependency>
 
-        <!-- 测试 -->
+        <!-- Tests -->
         <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
@@ -107,7 +101,7 @@
 
     <build>
         <plugins>
-            <!-- Scala 编译插件 -->
+            <!-- Scala compiler -->
             <plugin>
                 <groupId>net.alchim31.maven</groupId>
                 <artifactId>scala-maven-plugin</artifactId>
@@ -121,15 +115,18 @@
                     </execution>
                 </executions>
             </plugin>
-            <!-- 打包为Fat Jar -->
+
+            <!-- Java 17 compatibility for Spark tests -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
                 <configuration>
-                    <argLine>--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED</argLine>
+                    <argLine>--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED</argLine>
                 </configuration>
             </plugin>
+
+            <!-- Build shaded jar -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
@@ -137,7 +134,9 @@
                 <executions>
                     <execution>
                         <phase>package</phase>
-                        <goals><goal>shade</goal></goals>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
                         <configuration>
                             <createDependencyReducedPom>false</createDependencyReducedPom>
                             <filters>
