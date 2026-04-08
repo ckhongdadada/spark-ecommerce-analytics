@@ -87,6 +87,8 @@ object Main extends Logging {
     logger.info("=" * 72)
     logger.info(s"${AppConfig.PROJECT_DISPLAY_NAME} ${AppConfig.PROJECT_VERSION}")
     logger.info(s"Domain: ${AppConfig.PROJECT_DOMAIN_LABEL}")
+    logger.info(s"Environment: ${AppConfig.APP_ENV} | Master: ${AppConfig.MASTER}")
+    logger.info(s"Streaming: source=${AppConfig.STREAM_SOURCE}, sink=${AppConfig.STREAM_SINK}")
     logger.info(s"Enabled modules: $moduleSummary")
     logger.info("=" * 72)
   }

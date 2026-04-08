@@ -69,10 +69,14 @@ object SparkSessionFactory {
 
   private def ensureRuntimeDirectories(): Unit = {
     Seq(
+      AppConfig.OUTPUT_ROOT,
       AppConfig.EVENT_LOG_DIR,
       AppConfig.CHECKPOINT_PATH,
       AppConfig.STREAM_OUTPUT_PATH,
-      AppConfig.BENCHMARK_OUTPUT_PATH
+      AppConfig.STREAM_INVALID_OUTPUT_PATH,
+      AppConfig.STREAM_ALERT_OUTPUT_PATH,
+      AppConfig.BENCHMARK_OUTPUT_PATH,
+      AppConfig.DQ_OUTPUT_PATH
     ).foreach { path =>
       Files.createDirectories(Paths.get(path))
     }

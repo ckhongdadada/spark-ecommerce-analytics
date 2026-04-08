@@ -2,7 +2,7 @@ package com.ecommerce.module
 
 import com.ecommerce.config.AppConfig
 import com.ecommerce.core.{Behaviors, SparkSessionFactory}
-import com.ecommerce.util.Logging
+import com.ecommerce.util.{DataQualityGuard, Logging}
 import org.apache.spark.graphx._
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
@@ -20,10 +20,11 @@ object Module4_GraphX extends Logging {
     val spark = SparkSessionFactory.getSession()
     import spark.implicits._
 
-    val rawDF = spark.read
-      .option("header", "true")
-      .option("inferSchema", "true")
-      .csv(AppConfig.RAW_LOG_PATH)
+    val rawDF = DataQualityGuard.loadValidatedBatchEvents(
+      spark,
+      AppConfig.RAW_LOG_PATH,
+      sourceTag = "module4_graphx"
+    )
 
     val buyDF = rawDF
       .filter($"behavior" === Behaviors.BUY)

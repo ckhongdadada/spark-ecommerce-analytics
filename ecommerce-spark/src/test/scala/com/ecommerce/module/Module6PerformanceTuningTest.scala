@@ -1,6 +1,6 @@
 package com.ecommerce.module
 
-import org.junit.Assert.assertEquals
+import org.junit.Assert.{assertEquals, assertTrue}
 import org.junit.Test
 
 class Module6PerformanceTuningTest {
@@ -22,5 +22,8 @@ class Module6PerformanceTuningTest {
     assertEquals(123L, summary.avgDurationMs)
     assertEquals(110L, summary.medianDurationMs)
     assertEquals(160L, summary.p95DurationMs)
+    assertEquals(26L, summary.stddevDurationMs)
+    assertEquals(21.0811, summary.cvPercent, 0.0001)
+    assertTrue(summary.cvPercent > 0.0)
   }
 }

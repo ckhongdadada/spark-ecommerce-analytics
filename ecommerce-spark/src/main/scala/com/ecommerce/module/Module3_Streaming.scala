@@ -1,15 +1,20 @@
 package com.ecommerce.module
 
 import com.ecommerce.config.AppConfig
-import com.ecommerce.core.SparkSessionFactory
-import com.ecommerce.util.Logging
+import com.ecommerce.core.{Behaviors, SparkSessionFactory}
+import com.ecommerce.util.{DataQualityGuard, Logging}
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.functions._
-import org.apache.spark.sql.streaming.Trigger
-import org.apache.spark.sql.types.{LongType, StringType, StructField, StructType}
+import org.apache.spark.sql.streaming.{StreamingQuery, Trigger}
+import org.apache.spark.sql.types.{StringType, StructField, StructType}
 
 /**
  * Module 3: Structured Streaming.
+ *
+ * Production-oriented improvements:
+ * 1) source/sink fully config-driven
+ * 2) valid/invalid stream split with durable invalid sink
+ * 3) window-level quality alerts persisted to file sink
  */
 object Module3_Streaming extends Logging {
 
@@ -20,8 +25,13 @@ object Module3_Streaming extends Logging {
     logger.info(s"  ${AppConfig.moduleName("3")}")
     logger.info("=" * 60)
 
-    val useKafka = System.getProperty("streaming.source", "socket") == "kafka"
-    if (useKafka) runWithKafka() else runWithSocket()
+    AppConfig.STREAM_SOURCE match {
+      case "kafka" => runWithKafka()
+      case "socket" => runWithSocket()
+      case unknown =>
+        logger.warn(s"Unknown STREAM_SOURCE '$unknown', fallback to socket.")
+        runWithSocket()
+    }
   }
 
   def runWithKafka(): Unit = {
@@ -36,34 +46,19 @@ object Module3_Streaming extends Logging {
       .load()
 
     val schema = StructType(Seq(
-      StructField("userId", StringType, nullable = false),
-      StructField("itemId", StringType, nullable = false),
-      StructField("behavior", StringType, nullable = false),
-      StructField("timestamp", LongType, nullable = false)
+      StructField("userId", StringType, nullable = true),
+      StructField("itemId", StringType, nullable = true),
+      StructField("category", StringType, nullable = true),
+      StructField("behavior", StringType, nullable = true),
+      StructField("timestamp", StringType, nullable = true)
     ))
 
     val eventDF = rawStream
       .selectExpr("CAST(value AS STRING) AS json_str")
       .select(from_json(col("json_str"), schema).alias("data"))
       .select("data.*")
-      .withColumn("event_time", to_timestamp(from_unixtime(col("timestamp"))))
 
-    val windowedDF = aggregateMetricsByWindow(
-      eventDF.withWatermark("event_time", "10 seconds"),
-      s"${AppConfig.STREAM_WINDOW} seconds",
-      s"${AppConfig.STREAM_SLIDE} seconds"
-    )
-
-    val query = writeWindowReport(
-      flattenWindowedMetrics(windowedDF),
-      s"$streamingOutputRoot/kafka",
-      s"${AppConfig.CHECKPOINT_PATH}/kafka",
-      "10 seconds"
-    )
-
-    logger.info(s"Kafka output path: $streamingOutputRoot/kafka")
-    query.awaitTermination(AppConfig.STREAM_TIMEOUT)
-    if (query.isActive) query.stop()
+    runStreamingPipeline(eventDF, sourceTag = "kafka")
   }
 
   def runWithSocket(): Unit = {
@@ -71,7 +66,6 @@ object Module3_Streaming extends Logging {
     logger.info("Input format: userId,itemId,category,behavior,timestamp")
 
     val spark = SparkSessionFactory.getSession()
-    import spark.implicits._
 
     val lines = spark.readStream
       .format("socket")
@@ -80,33 +74,51 @@ object Module3_Streaming extends Logging {
       .load()
 
     val eventDF = lines
-      .as[String]
-      .map(_.split(",").map(_.trim))
-      .filter(_.length == 5)
-      .flatMap { fields =>
-        scala.util.Try(fields(4).toLong).toOption.map { ts =>
-          (fields(0), fields(1), fields(2), fields(3), ts)
-        }
-      }
-      .toDF("userId", "itemId", "category", "behavior", "timestamp")
-      .withColumn("event_time", to_timestamp(from_unixtime(col("timestamp"))))
+      .select(split(col("value"), ",").alias("parts"))
+      .select(
+        when(size(col("parts")) >= 1, trim(element_at(col("parts"), 1))).alias("userId"),
+        when(size(col("parts")) >= 2, trim(element_at(col("parts"), 2))).alias("itemId"),
+        when(size(col("parts")) >= 3, trim(element_at(col("parts"), 3))).alias("category"),
+        when(size(col("parts")) >= 4, trim(element_at(col("parts"), 4))).alias("behavior"),
+        when(size(col("parts")) >= 5, trim(element_at(col("parts"), 5))).alias("timestamp")
+      )
 
-    val pvuvDF = aggregateMetricsByWindow(
-      eventDF.withWatermark("event_time", "20 seconds"),
-      "1 minute",
-      "30 seconds"
+    runStreamingPipeline(eventDF, sourceTag = "socket")
+  }
+
+  private def runStreamingPipeline(inputDF: DataFrame, sourceTag: String): Unit = {
+    val watermarkDelay = s"${AppConfig.STREAM_WINDOW + AppConfig.STREAM_SLIDE} seconds"
+    val windowDuration = s"${AppConfig.STREAM_WINDOW} seconds"
+    val slideDuration = s"${AppConfig.STREAM_SLIDE} seconds"
+
+    val (validDF, invalidDF) = DataQualityGuard.splitValidAndInvalid(inputDF)
+    val validWithWatermark = validDF.withWatermark("event_time", watermarkDelay)
+
+    val metricsDF = flattenWindowedMetrics(
+      aggregateMetricsByWindow(validWithWatermark, windowDuration, slideDuration)
     )
 
-    val query = writeWindowReport(
-      flattenWindowedMetrics(pvuvDF),
-      s"$streamingOutputRoot/socket",
-      s"${AppConfig.CHECKPOINT_PATH}/socket",
-      "10 seconds"
+    val alertsDF = buildWindowAlerts(validWithWatermark, windowDuration, slideDuration)
+
+    val metricsQuery = writeMetricsSink(metricsDF, sourceTag)
+    val invalidQuery = writeFileSink(
+      invalidDF,
+      s"${AppConfig.STREAM_INVALID_OUTPUT_PATH}/$sourceTag",
+      s"${AppConfig.CHECKPOINT_PATH}/${sourceTag}_invalid",
+      s"${sourceTag}_invalid"
+    )
+    val alertQuery = writeFileSink(
+      alertsDF,
+      s"${AppConfig.STREAM_ALERT_OUTPUT_PATH}/$sourceTag",
+      s"${AppConfig.CHECKPOINT_PATH}/${sourceTag}_alerts",
+      s"${sourceTag}_alerts"
     )
 
-    logger.info(s"Socket output path: $streamingOutputRoot/socket")
-    query.awaitTermination(AppConfig.STREAM_TIMEOUT * 2L)
-    if (query.isActive) query.stop()
+    logger.info(s"Metrics sink: ${AppConfig.STREAM_SINK}")
+    logger.info(s"Invalid rows path: ${AppConfig.STREAM_INVALID_OUTPUT_PATH}/$sourceTag")
+    logger.info(s"Alert path: ${AppConfig.STREAM_ALERT_OUTPUT_PATH}/$sourceTag")
+
+    awaitAndStop(metricsQuery, Seq(invalidQuery, alertQuery))
     logger.info("Module 3 completed")
   }
 
@@ -131,13 +143,98 @@ object Module3_Streaming extends Logging {
     )
   }
 
-  private def writeWindowReport(df: DataFrame, outputPath: String, checkpointPath: String, triggerInterval: String) = {
+  private[module] def buildWindowAlerts(df: DataFrame, windowDuration: String, slideDuration: String): DataFrame = {
+    df.groupBy(window(col("event_time"), windowDuration, slideDuration))
+      .agg(
+        count("*").alias("total_events"),
+        sum(when(col("behavior") === Behaviors.BUY, 1).otherwise(0)).alias("buy_events"),
+        approx_count_distinct(col("userId")).alias("uv")
+      )
+      .withColumn(
+        "buy_rate",
+        when(col("total_events") === 0, lit(0.0))
+          .otherwise(col("buy_events").cast("double") / col("total_events").cast("double"))
+      )
+      .withColumn(
+        "alert_reason",
+        when(col("total_events") < lit(AppConfig.STREAM_ALERT_MIN_WINDOW_EVENTS), lit("low_window_events"))
+          .when(col("buy_rate") < lit(AppConfig.DQ_MIN_BUY_RATE), lit("buy_rate_too_low"))
+          .when(col("buy_rate") > lit(AppConfig.DQ_MAX_BUY_RATE), lit("buy_rate_too_high"))
+      )
+      .filter(col("alert_reason").isNotNull)
+      .select(
+        col("window.start").alias("window_start"),
+        col("window.end").alias("window_end"),
+        col("total_events"),
+        col("buy_events"),
+        col("buy_rate"),
+        col("uv"),
+        col("alert_reason"),
+        current_timestamp().alias("detected_at")
+      )
+  }
+
+  private def writeMetricsSink(df: DataFrame, sourceTag: String): StreamingQuery = {
+    val checkpoint = s"${AppConfig.CHECKPOINT_PATH}/${sourceTag}_metrics_${AppConfig.STREAM_SINK}"
+    AppConfig.STREAM_SINK match {
+      case "kafka" =>
+        val payloadDF = df.select(
+          col("behavior").cast("string").alias("key"),
+          to_json(
+            struct(
+              col("window_start"),
+              col("window_end"),
+              col("behavior"),
+              col("pv"),
+              col("uv")
+            )
+          ).alias("value")
+        ).selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)")
+
+        payloadDF.writeStream
+          .format("kafka")
+          .outputMode("append")
+          .option("kafka.bootstrap.servers", AppConfig.KAFKA_BROKERS)
+          .option("topic", AppConfig.KAFKA_OUTPUT_TOPIC)
+          .option("checkpointLocation", checkpoint)
+          .queryName(s"${sourceTag}_metrics_kafka")
+          .trigger(Trigger.ProcessingTime(AppConfig.STREAM_TRIGGER_INTERVAL))
+          .start()
+
+      case _ =>
+        writeFileSink(
+          df,
+          s"$streamingOutputRoot/$sourceTag/metrics",
+          checkpoint,
+          s"${sourceTag}_metrics_file"
+        )
+    }
+  }
+
+  private def writeFileSink(df: DataFrame, outputPath: String, checkpointPath: String, queryName: String): StreamingQuery = {
     df.writeStream
       .format("parquet")
       .outputMode("append")
       .option("path", outputPath)
       .option("checkpointLocation", checkpointPath)
-      .trigger(Trigger.ProcessingTime(triggerInterval))
+      .queryName(queryName)
+      .trigger(Trigger.ProcessingTime(AppConfig.STREAM_TRIGGER_INTERVAL))
       .start()
+  }
+
+  private def awaitAndStop(primaryQuery: StreamingQuery, sideQueries: Seq[StreamingQuery]): Unit = {
+    val allQueries = primaryQuery +: sideQueries
+    try {
+      if (AppConfig.STREAM_TIMEOUT > 0L) {
+        primaryQuery.awaitTermination(AppConfig.STREAM_TIMEOUT)
+        logger.info(s"Streaming timeout reached: ${AppConfig.STREAM_TIMEOUT} ms")
+      } else {
+        primaryQuery.awaitTermination()
+      }
+    } finally {
+      allQueries.foreach { query =>
+        if (query.isActive) query.stop()
+      }
+    }
   }
 }

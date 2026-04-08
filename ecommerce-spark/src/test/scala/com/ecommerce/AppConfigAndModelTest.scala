@@ -17,6 +17,9 @@ class AppConfigAndModelTest {
     val ids = AppConfig.MODULE_DEFINITIONS.map(_.id)
     org.junit.Assert.assertEquals(ids.size, ids.distinct.size)
     org.junit.Assert.assertTrue(AppConfig.ALL_MODE_MODULE_IDS.forall(AppConfig.ENABLED_MODULE_IDS.contains))
+    org.junit.Assert.assertTrue(Set("local", "dev", "prod").contains(AppConfig.APP_ENV))
+    org.junit.Assert.assertTrue(Set("socket", "kafka").contains(AppConfig.STREAM_SOURCE))
+    org.junit.Assert.assertTrue(Set("file", "kafka").contains(AppConfig.STREAM_SINK))
   }
 
   @Test

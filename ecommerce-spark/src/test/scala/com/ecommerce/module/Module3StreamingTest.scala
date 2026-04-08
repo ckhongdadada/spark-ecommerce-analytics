@@ -37,4 +37,26 @@ class Module3StreamingTest {
       SparkSessionFactory.stop()
     }
   }
+
+  @Test
+  def buildWindowAlertsShouldFlagLowVolumeWindow(): Unit = {
+    val spark = SparkSessionFactory.getSession()
+    import spark.implicits._
+
+    try {
+      val eventDF = Seq(
+        ("U1", "pv", Timestamp.valueOf("2024-01-06 10:00:05")),
+        ("U2", "buy", Timestamp.valueOf("2024-01-06 10:00:20"))
+      ).toDF("userId", "behavior", "event_time")
+
+      val alerts = Module3_Streaming
+        .buildWindowAlerts(eventDF, "1 minute", "1 minute")
+        .collect()
+
+      assertEquals(1, alerts.length)
+      assertEquals("low_window_events", alerts.head.getAs[String]("alert_reason"))
+    } finally {
+      SparkSessionFactory.stop()
+    }
+  }
 }

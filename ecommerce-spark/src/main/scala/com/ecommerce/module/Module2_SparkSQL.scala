@@ -2,7 +2,7 @@ package com.ecommerce.module
 
 import com.ecommerce.config.AppConfig
 import com.ecommerce.core.{Behaviors, SparkSessionFactory}
-import com.ecommerce.util.Logging
+import com.ecommerce.util.{DataQualityGuard, Logging}
 import org.apache.spark.sql.{DataFrame, SaveMode}
 import org.apache.spark.sql.functions._
 
@@ -17,10 +17,11 @@ object Module2_SparkSQL extends Logging {
     logger.info("=" * 60)
 
     val spark = SparkSessionFactory.getSession()
-    val rawDF = spark.read
-      .option("header", "true")
-      .option("inferSchema", "true")
-      .csv(AppConfig.RAW_LOG_PATH)
+    val rawDF = DataQualityGuard.loadValidatedBatchEvents(
+      spark,
+      AppConfig.RAW_LOG_PATH,
+      sourceTag = "module2_sql"
+    )
 
     logger.info(s"Total rows: ${rawDF.count()}")
 

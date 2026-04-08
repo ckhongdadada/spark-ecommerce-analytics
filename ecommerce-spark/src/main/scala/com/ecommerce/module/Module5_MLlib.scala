@@ -2,18 +2,34 @@ package com.ecommerce.module
 
 import com.ecommerce.config.AppConfig
 import com.ecommerce.core.{Behaviors, SparkSessionFactory}
-import com.ecommerce.util.Logging
-import org.apache.spark.ml.Pipeline
+import com.ecommerce.util.{DataQualityGuard, Logging}
+import org.apache.spark.ml.{Pipeline, Transformer}
 import org.apache.spark.ml.classification.{LogisticRegression, RandomForestClassifier}
 import org.apache.spark.ml.evaluation.{BinaryClassificationEvaluator, MulticlassClassificationEvaluator}
 import org.apache.spark.ml.feature.{StandardScaler, VectorAssembler}
+import org.apache.spark.ml.tuning.{CrossValidator, ParamGridBuilder}
+import org.apache.spark.ml.util.MLWritable
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.functions._
+
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Path, Paths}
 
 /**
  * Module 5: MLlib behavior prediction.
  */
 object Module5_MLlib extends Logging {
+
+  private case class ModelEvaluation(
+    name: String,
+    auc: Double,
+    accuracy: Double,
+    f1: Double,
+    precision: Double,
+    recall: Double,
+    cvBestAuc: Double,
+    model: Transformer
+  )
 
   def run(): Unit = {
     logger.info("=" * 60)
@@ -22,10 +38,11 @@ object Module5_MLlib extends Logging {
 
     val spark = SparkSessionFactory.getSession()
 
-    val rawDF = spark.read
-      .option("header", "true")
-      .option("inferSchema", "true")
-      .csv(AppConfig.RAW_LOG_PATH)
+    val rawDF = DataQualityGuard.loadValidatedBatchEvents(
+      spark,
+      AppConfig.RAW_LOG_PATH,
+      sourceTag = "module5_mllib"
+    )
 
     val userFeatureDF = rawDF
       .groupBy("userId")
@@ -73,11 +90,15 @@ object Module5_MLlib extends Logging {
       .setWithStd(true)
       .setWithMean(true)
 
-    val Array(trainDF, testDF) = balancedDF.randomSplit(
+    val Array(trainValDF, testDF) = balancedDF.randomSplit(
       Array(AppConfig.ML_TRAIN_RATIO, AppConfig.ML_TEST_RATIO),
-      seed = 42L
+      seed = AppConfig.ML_RANDOM_SEED
     )
-    logger.info(s"Train: ${trainDF.count()} | Test: ${testDF.count()}")
+    val trainCount = trainValDF.count()
+    val testCount = testDF.count()
+    require(trainCount > 0, "Training split is empty. Please provide more data.")
+    require(testCount > 0, "Test split is empty. Please provide more data.")
+    logger.info(s"Train/CV: $trainCount | Holdout test: $testCount")
 
     val lr = new LogisticRegression()
       .setMaxIter(AppConfig.ML_MAX_ITER)
@@ -87,32 +108,124 @@ object Module5_MLlib extends Logging {
       .setWeightCol("classWeight")
 
     val lrPipeline = new Pipeline().setStages(Array(assembler, scaler, lr))
-    val lrPred = lrPipeline.fit(trainDF).transform(testDF)
-    evaluateModel("LogisticRegression", lrPred)
+    val lrGrid = new ParamGridBuilder()
+      .addGrid(lr.regParam, AppConfig.ML_LR_REG_PARAMS)
+      .addGrid(lr.elasticNetParam, AppConfig.ML_LR_ELASTIC_NET_PARAMS)
+      .build()
 
     val rf = new RandomForestClassifier()
-      .setNumTrees(100)
-      .setMaxDepth(5)
       .setFeaturesCol("features")
       .setLabelCol("label")
-      .setSeed(42L)
+      .setSeed(AppConfig.ML_RANDOM_SEED)
       .setWeightCol("classWeight")
 
     val rfPipeline = new Pipeline().setStages(Array(assembler, scaler, rf))
-    val rfModel = rfPipeline.fit(trainDF)
-    val rfPred = rfModel.transform(testDF)
-    evaluateModel("RandomForest", rfPred)
+    val rfGrid = new ParamGridBuilder()
+      .addGrid(rf.numTrees, AppConfig.ML_RF_NUM_TREES_GRID)
+      .addGrid(rf.maxDepth, AppConfig.ML_RF_MAX_DEPTH_GRID)
+      .build()
 
-    rfModel.write.overwrite().save(AppConfig.ML_MODEL_PATH)
-    logger.info(s"Model saved to: ${AppConfig.ML_MODEL_PATH}")
+    val aucEvaluator = new BinaryClassificationEvaluator()
+      .setLabelCol("label")
+      .setRawPredictionCol("rawPrediction")
+      .setMetricName("areaUnderROC")
+
+    val evaluations = Seq(
+      trainAndEvaluate(
+        modelName = "LogisticRegression",
+        trainValDF = trainValDF,
+        testDF = testDF,
+        pipeline = lrPipeline,
+        paramGrid = lrGrid,
+        aucEvaluator = aucEvaluator
+      ),
+      trainAndEvaluate(
+        modelName = "RandomForest",
+        trainValDF = trainValDF,
+        testDF = testDF,
+        pipeline = rfPipeline,
+        paramGrid = rfGrid,
+        aucEvaluator = aucEvaluator
+      )
+    ).sortBy(metric => (-metric.auc, -metric.f1, -metric.accuracy))
+
+    evaluations.foreach(logModelEvaluation)
+
+    val best = evaluations.head
+    persistBestModel(best)
+    persistSelectionReport(evaluations)
+
+    logger.info(
+      f"Best model selected: ${best.name}, holdout AUC=${best.auc}%.4f, " +
+        f"F1=${best.f1}%.4f, Accuracy=${best.accuracy}%.4f"
+    )
     logger.info("Module 5 completed")
   }
 
-  private def evaluateModel(name: String, predictions: DataFrame): Unit = {
+  private def trainAndEvaluate(
+    modelName: String,
+    trainValDF: DataFrame,
+    testDF: DataFrame,
+    pipeline: Pipeline,
+    paramGrid: Array[org.apache.spark.ml.param.ParamMap],
+    aucEvaluator: BinaryClassificationEvaluator
+  ): ModelEvaluation = {
+    val crossValidator = new CrossValidator()
+      .setEstimator(pipeline)
+      .setEstimatorParamMaps(paramGrid)
+      .setEvaluator(aucEvaluator)
+      .setNumFolds(AppConfig.ML_CV_FOLDS)
+      .setSeed(AppConfig.ML_RANDOM_SEED)
+      .setParallelism(AppConfig.ML_CV_PARALLELISM)
+
+    val cvModel = crossValidator.fit(trainValDF)
+    val predictions = cvModel.bestModel.transform(testDF)
+    val metrics = evaluatePredictions(modelName, predictions)
+    val cvBestAuc = if (cvModel.avgMetrics.nonEmpty) cvModel.avgMetrics.max else 0.0
+
+    ModelEvaluation(
+      name = modelName,
+      auc = metrics.auc,
+      accuracy = metrics.accuracy,
+      f1 = metrics.f1,
+      precision = metrics.precision,
+      recall = metrics.recall,
+      cvBestAuc = cvBestAuc,
+      model = cvModel.bestModel
+    )
+  }
+
+  private case class EvalMetrics(
+    auc: Double,
+    accuracy: Double,
+    f1: Double,
+    precision: Double,
+    recall: Double
+  )
+
+  private def evaluatePredictions(name: String, predictions: DataFrame): EvalMetrics = {
     val accuracy = new MulticlassClassificationEvaluator()
       .setLabelCol("label")
       .setPredictionCol("prediction")
       .setMetricName("accuracy")
+      .evaluate(predictions)
+
+    val f1 = new MulticlassClassificationEvaluator()
+      .setLabelCol("label")
+      .setPredictionCol("prediction")
+      .setMetricName("f1")
+      .evaluate(predictions)
+
+    val precision = new MulticlassClassificationEvaluator()
+      .setLabelCol("label")
+      .setPredictionCol("prediction")
+      .setMetricName("weightedPrecision")
+      .evaluate(predictions)
+
+    val recall = new MulticlassClassificationEvaluator()
+      .setLabelCol("label")
+      .setPredictionCol("prediction")
+      .setMetricName("weightedRecall")
       .evaluate(predictions)
 
     val auc = new BinaryClassificationEvaluator()
@@ -121,12 +234,63 @@ object Module5_MLlib extends Logging {
       .setMetricName("areaUnderROC")
       .evaluate(predictions)
 
-    logger.info(f"  [$name] Accuracy = $accuracy%.4f")
-    logger.info(f"  [$name] AUC      = $auc%.4f")
+    logger.info(f"[$name] Holdout metrics: AUC=$auc%.4f, Accuracy=$accuracy%.4f, F1=$f1%.4f, Precision=$precision%.4f, Recall=$recall%.4f")
 
     predictions.groupBy("label", "prediction")
       .count()
       .orderBy("label", "prediction")
       .show()
+
+    EvalMetrics(
+      auc = auc,
+      accuracy = accuracy,
+      f1 = f1,
+      precision = precision,
+      recall = recall
+    )
+  }
+
+  private def logModelEvaluation(evaluation: ModelEvaluation): Unit = {
+    logger.info(
+      f"[${evaluation.name}] CV best AUC=${evaluation.cvBestAuc}%.4f | " +
+        f"Holdout AUC=${evaluation.auc}%.4f | F1=${evaluation.f1}%.4f | " +
+        f"Accuracy=${evaluation.accuracy}%.4f"
+    )
+  }
+
+  private def persistBestModel(evaluation: ModelEvaluation): Unit = {
+    evaluation.model match {
+      case writable: MLWritable =>
+        writable.write.overwrite().save(AppConfig.ML_MODEL_PATH)
+        logger.info(s"Best model saved to: ${AppConfig.ML_MODEL_PATH}")
+      case _ =>
+        logger.warn(s"Best model ${evaluation.name} is not writable; skipped model persistence")
+    }
+  }
+
+  private def persistSelectionReport(evaluations: Seq[ModelEvaluation]): Unit = {
+    val reportPath = Paths.get(AppConfig.ML_MODEL_SELECTION_REPORT_PATH)
+    Files.createDirectories(reportPath.getParent)
+
+    val header = "rank,model,cv_best_auc,holdout_auc,accuracy,f1,precision,recall"
+    val rows = evaluations.zipWithIndex.map { case (evaluation, index) =>
+      Seq(
+        (index + 1).toString,
+        evaluation.name,
+        f"${evaluation.cvBestAuc}%.6f",
+        f"${evaluation.auc}%.6f",
+        f"${evaluation.accuracy}%.6f",
+        f"${evaluation.f1}%.6f",
+        f"${evaluation.precision}%.6f",
+        f"${evaluation.recall}%.6f"
+      ).map(csvEscape).mkString(",")
+    }
+
+    Files.write(reportPath, (header +: rows).mkString(System.lineSeparator()).getBytes(StandardCharsets.UTF_8))
+    logger.info(s"Model selection report saved to: ${AppConfig.ML_MODEL_SELECTION_REPORT_PATH}")
+  }
+
+  private def csvEscape(value: String): String = {
+    "\"" + value.replace("\"", "\"\"") + "\""
   }
 }
