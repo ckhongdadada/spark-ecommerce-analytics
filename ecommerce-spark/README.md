@@ -1,71 +1,71 @@
-# Ecommerce Spark Analytics (Template-Friendly)
+# 电商 Spark 分析项目（模板友好版）
 
-This is a Scala + Spark course project that includes:
-- RDD preprocessing
-- Spark SQL reporting
-- Structured Streaming
-- GraphX
-- MLlib
-- Performance benchmark module
+本项目基于 Scala + Spark，包含以下核心模块：
+- RDD 数据预处理
+- Spark SQL 报表分析
+- Structured Streaming 实时统计
+- GraphX 图分析
+- MLlib 行为预测
+- 性能调优与 Benchmark
 
-## Why it is easier to adapt now
+## 为什么现在更容易适配期末要求
 
-The project is now more metadata-driven.  
-If assignment wording changes later, you usually only need to update:
+当前代码已经改为“配置驱动”结构。  
+后续作业题目变更时，通常只需要优先修改：
 
 - `src/main/scala/com/ecommerce/config/AppConfig.scala`
 - `src/main/scala/com/ecommerce/Main.scala`
-- `README.md` and report text
+- `README.md` 与报告文案
 
-Key configurable areas in `AppConfig`:
-- project display name/version/domain label
-- behavior labels (`pv/buy/cart/fav`)
-- category list and category-to-item generator settings
-- module catalog (name, enabled switch, include-in-all switch)
-- run paths and benchmark paths
+`AppConfig` 中已经集中管理：
+- 项目名称、版本、领域标签
+- 行为标签（`pv/buy/cart/fav`）
+- 类目集合与数据生成规则
+- 模块目录（名称、启用开关、`all` 模式是否纳入）
+- 各模块输入输出路径与 benchmark 路径
 
-## Build
+## 构建方式
 
-Use the local isolated Maven environment:
+使用项目内隔离 Maven 环境：
 
 ```powershell
-# full build
+# 完整构建
 .\build-local.ps1
 
-# build without tests
+# 跳过测试
 .\build-local.ps1 -SkipTests
 ```
 
-## Run
+## 运行方式
 
 ```bash
-# run all enabled batch modules configured in AppConfig.ALL_MODE_MODULE_IDS
+# 运行 AppConfig.ALL_MODE_MODULE_IDS 配置的全部批处理模块
 spark-submit --class com.ecommerce.Main target/ecommerce-spark-analysis-1.0.0.jar all
 
-# generate demo data only
+# 仅生成模拟数据
 spark-submit --class com.ecommerce.Main target/ecommerce-spark-analysis-1.0.0.jar gen
 
-# run one module
+# 运行单模块
 spark-submit --class com.ecommerce.Main target/ecommerce-spark-analysis-1.0.0.jar 1
 spark-submit --class com.ecommerce.Main target/ecommerce-spark-analysis-1.0.0.jar 3
 spark-submit --class com.ecommerce.Main target/ecommerce-spark-analysis-1.0.0.jar 6
 ```
 
-## Benchmark output
+## Benchmark 输出
 
-After running module `6`, outputs are written to `output/benchmark/`:
+运行模块 `6` 后，会在 `output/benchmark/` 生成：
 - `measurements.csv`
 - `summaries.csv`
 - `explain_plan.txt`
 - `README.txt`
 
-If runtime environment supports it, Spark event logs are written to `output/eventlog/`.
+如果运行环境支持，会同时写入 `output/eventlog/` 作为 Spark 事件日志。
 
-## Practical adaptation guide
+## 期末作业快速适配建议
 
-If your final assignment asks for a different business theme:
+如果最终作业要求换业务主题：
 
-1. Update labels and semantics in `AppConfig` (domain name, behavior labels, category list).
-2. Adjust enabled modules and display names in `AppConfig.MODULE_DEFINITIONS`.
-3. Keep module code structure unchanged unless required by new metrics.
-4. Re-run `.\build-local.ps1` to validate all tests and packaging.
+1. 在 `AppConfig` 中先改领域标签、行为语义、类目定义。
+2. 在 `AppConfig.MODULE_DEFINITIONS` 中改模块名称与启用策略。
+3. 仅在指标逻辑真的变化时再调整对应模块代码。
+4. 最后运行 `.\build-local.ps1` 做完整验证。
