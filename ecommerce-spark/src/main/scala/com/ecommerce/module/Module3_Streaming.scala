@@ -9,8 +9,7 @@ import org.apache.spark.sql.streaming.Trigger
 import org.apache.spark.sql.types.{LongType, StringType, StructField, StructType}
 
 /**
- * 模块三：Structured Streaming 实时监控
- * 支持 Kafka 或 Socket 输入，并将窗口聚合结果持续写入 Parquet 文件。
+ * Module 3: Structured Streaming.
  */
 object Module3_Streaming extends Logging {
 
@@ -18,7 +17,7 @@ object Module3_Streaming extends Logging {
 
   def run(): Unit = {
     logger.info("=" * 60)
-    logger.info("  模块三：Structured Streaming 实时监控")
+    logger.info(s"  ${AppConfig.moduleName("3")}")
     logger.info("=" * 60)
 
     val useKafka = System.getProperty("streaming.source", "socket") == "kafka"
@@ -26,7 +25,7 @@ object Module3_Streaming extends Logging {
   }
 
   def runWithKafka(): Unit = {
-    logger.info("使用 Kafka 数据源")
+    logger.info("Streaming source: Kafka")
     val spark = SparkSessionFactory.getSession()
 
     val rawStream = spark.readStream
@@ -62,15 +61,14 @@ object Module3_Streaming extends Logging {
       "10 seconds"
     )
 
-    logger.info(s"Kafka Streaming 结果写入: $streamingOutputRoot/kafka")
+    logger.info(s"Kafka output path: $streamingOutputRoot/kafka")
     query.awaitTermination(AppConfig.STREAM_TIMEOUT)
     if (query.isActive) query.stop()
   }
 
   def runWithSocket(): Unit = {
-    logger.info(s"使用 Socket 数据源: ${AppConfig.SOCKET_HOST}:${AppConfig.SOCKET_PORT}")
-    logger.info("请先启动: nc -lk 9999")
-    logger.info("输入格式: U1,I1,Electronics,pv,1700000001")
+    logger.info(s"Streaming source: Socket (${AppConfig.SOCKET_HOST}:${AppConfig.SOCKET_PORT})")
+    logger.info("Input format: userId,itemId,category,behavior,timestamp")
 
     val spark = SparkSessionFactory.getSession()
     import spark.implicits._
@@ -106,10 +104,10 @@ object Module3_Streaming extends Logging {
       "10 seconds"
     )
 
-    logger.info(s"Socket Streaming 结果写入: $streamingOutputRoot/socket")
+    logger.info(s"Socket output path: $streamingOutputRoot/socket")
     query.awaitTermination(AppConfig.STREAM_TIMEOUT * 2L)
     if (query.isActive) query.stop()
-    logger.info("模块三执行完毕")
+    logger.info("Module 3 completed")
   }
 
   private[module] def aggregateMetricsByWindow(df: DataFrame, windowDuration: String, slideDuration: String): DataFrame = {

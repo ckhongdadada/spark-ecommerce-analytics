@@ -1,12 +1,15 @@
 package com.ecommerce.util
 
+import com.ecommerce.config.AppConfig
+import com.ecommerce.core.Behaviors
+
 import java.io.{File, PrintWriter}
 import scala.collection.mutable.ArrayBuffer
 import scala.util.Random
 
 /**
- * 模拟数据生成器。
- * 通过“用户画像 + 会话链路”生成更接近真实电商行为的数据，而不是完全独立随机采样。
+ * Demo data generator.
+ * Uses "user profile + session chain" instead of pure iid random sampling.
  */
 object DataGenerator {
 
@@ -25,17 +28,15 @@ object DataGenerator {
     timestamp: Long
   )
 
-  private[util] val Categories: Vector[String] =
-    Vector("Electronics", "Clothing", "Food", "Books", "Sports", "Beauty")
+  private[util] val Categories: Vector[String] = AppConfig.DOMAIN_CATEGORIES
 
-  private[util] val CategoryItems: Map[String, Vector[String]] = Map(
-    "Electronics" -> (1 to 1500).map(i => s"E$i").toVector,
-    "Clothing" -> (1 to 1500).map(i => s"C$i").toVector,
-    "Food" -> (1 to 1200).map(i => s"F$i").toVector,
-    "Books" -> (1 to 1200).map(i => s"B$i").toVector,
-    "Sports" -> (1 to 1000).map(i => s"S$i").toVector,
-    "Beauty" -> (1 to 1000).map(i => s"BE$i").toVector
-  )
+  private[util] val CategoryItems: Map[String, Vector[String]] = {
+    Categories.map { category =>
+      val prefix = AppConfig.CATEGORY_ITEM_PREFIX(category)
+      val size = AppConfig.CATEGORY_ITEM_SIZE(category)
+      category -> (1 to size).map(i => s"$prefix$i").toVector
+    }.toMap
+  }
 
   private val BaseTimestamp = 1700000000L
 
@@ -43,7 +44,7 @@ object DataGenerator {
     val rng = new Random(42L)
     val profiles = buildProfiles(userCount = 5000, rng)
 
-    println(s"[DataGenerator] 生成 $rowCount 条模拟数据 -> $outputPath")
+    println(s"[DataGenerator] generate $rowCount rows -> $outputPath")
     val outputFile = new File(outputPath)
     val parent = outputFile.getParentFile
     if (parent != null) parent.mkdirs()
@@ -69,7 +70,7 @@ object DataGenerator {
       writer.close()
     }
 
-    println("[DataGenerator] 完成")
+    println("[DataGenerator] done")
   }
 
   private[util] def buildProfiles(userCount: Int, rng: Random): Vector[UserProfile] = {
@@ -91,13 +92,13 @@ object DataGenerator {
 
     val pvCount = 1 + rng.nextInt(3)
     (1 to pvCount).foreach { _ =>
-      events += GeneratedEvent(profile.userId, primaryItem, primaryCategory, "pv", currentTs)
+      events += GeneratedEvent(profile.userId, primaryItem, primaryCategory, Behaviors.VIEW, currentTs)
       currentTs += 20 + rng.nextInt(90)
     }
 
     val favorite = rng.nextDouble() < 0.30
     if (favorite) {
-      events += GeneratedEvent(profile.userId, primaryItem, primaryCategory, "fav", currentTs)
+      events += GeneratedEvent(profile.userId, primaryItem, primaryCategory, Behaviors.FAVORITE, currentTs)
       currentTs += 30 + rng.nextInt(120)
     }
 
@@ -105,7 +106,7 @@ object DataGenerator {
       if (primaryCategory == profile.preferredCategory) 0.55 else 0.28
     val addToCart = rng.nextDouble() < cartProbability
     if (addToCart) {
-      events += GeneratedEvent(profile.userId, primaryItem, primaryCategory, "cart", currentTs)
+      events += GeneratedEvent(profile.userId, primaryItem, primaryCategory, Behaviors.CART, currentTs)
       currentTs += 30 + rng.nextInt(120)
     }
 
@@ -113,7 +114,7 @@ object DataGenerator {
       if (addToCart) profile.buyAffinity
       else profile.buyAffinity * 0.35
     if (rng.nextDouble() < buyProbability) {
-      events += GeneratedEvent(profile.userId, primaryItem, primaryCategory, "buy", currentTs)
+      events += GeneratedEvent(profile.userId, primaryItem, primaryCategory, Behaviors.BUY, currentTs)
       currentTs += 60 + rng.nextInt(180)
     }
 
@@ -121,7 +122,7 @@ object DataGenerator {
     (1 to extraBrowseCount).foreach { _ =>
       val category = chooseCategory(profile, rng)
       val itemId = chooseItem(category, profile, rng)
-      events += GeneratedEvent(profile.userId, itemId, category, "pv", currentTs)
+      events += GeneratedEvent(profile.userId, itemId, category, Behaviors.VIEW, currentTs)
       currentTs += 15 + rng.nextInt(90)
     }
 

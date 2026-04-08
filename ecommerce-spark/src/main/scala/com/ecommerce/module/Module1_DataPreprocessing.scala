@@ -11,14 +11,13 @@ import java.time.{Instant, ZoneId}
 import scala.util.Try
 
 /**
- * 模块一：RDD 数据预处理
- * 负责完成原始行为日志的读取、清洗、特征补充和结果落盘。
+ * Module 1: data preprocessing with RDD.
  */
 object Module1_DataPreprocessing extends Logging {
 
   def run(): Unit = {
     logger.info("=" * 60)
-    logger.info("  模块一：RDD 数据预处理")
+    logger.info(s"  ${AppConfig.moduleName("1")}")
     logger.info("=" * 60)
 
     val sc = SparkSessionFactory.getContext()
@@ -31,28 +30,28 @@ object Module1_DataPreprocessing extends Logging {
 
     val rawCount = dataRDD.count()
     val cleanCount = parsedRDD.count()
-    logger.info(s"原始数据总行数: $rawCount")
-    logger.info(s"清洗后数据行数: $cleanCount")
+    logger.info(s"Raw rows: $rawCount")
+    logger.info(s"Clean rows: $cleanCount")
 
-    logger.info("各行为统计:")
-    val behaviorCount = cleanRDD
+    logger.info("Behavior counts:")
+    cleanRDD
       .map(record => (record.behavior, 1))
       .reduceByKey(_ + _)
       .sortBy(_._2, ascending = false)
+      .collect()
+      .foreach { case (behavior, count) =>
+        logger.info(f"  $behavior%-8s -> $count%,d")
+      }
 
-    behaviorCount.collect().foreach { case (behavior, count) =>
-      logger.info(f"  $behavior%-6s -> $count%,d")
-    }
-
-    logger.info("Top 10 活跃用户（PV 行为）:")
+    logger.info(s"Top 10 active users by '${Behaviors.VIEW}':")
     cleanRDD
-      .filter(_.behavior == "pv")
+      .filter(_.behavior == Behaviors.VIEW)
       .map(record => (record.userId, 1))
       .reduceByKey(_ + _)
       .sortBy(_._2, ascending = false)
       .take(10)
       .foreach { case (userId, count) =>
-        logger.info(s"  $userId -> ${count}次")
+        logger.info(s"  $userId -> $count")
       }
 
     overwriteOutput(AppConfig.CLEAN_OUTPUT_PATH)
@@ -61,18 +60,18 @@ object Module1_DataPreprocessing extends Logging {
         s"${record.userId},${record.itemId},${record.category},${record.behavior},${record.hour},${record.dayOfWeek},${record.isWeekend}"
       )
       .saveAsTextFile(AppConfig.CLEAN_OUTPUT_PATH)
-    logger.info(s"清洗数据已保存至: ${AppConfig.CLEAN_OUTPUT_PATH}")
+    logger.info(s"Cleaned output saved: ${AppConfig.CLEAN_OUTPUT_PATH}")
 
-    val categoryBroadcast = sc.broadcast(Set("Electronics", "Clothing", "Food"))
+    val categoryBroadcast = sc.broadcast(AppConfig.HIGHLIGHT_CATEGORIES)
     val filteredRDD = cleanRDD.filter(record => categoryBroadcast.value.contains(record.category))
-    logger.info(s"过滤指定类目后的数据量: ${filteredRDD.count()}")
+    logger.info(s"Rows in highlighted categories: ${filteredRDD.count()}")
 
     dataRDD.unpersist()
     parsedRDD.unpersist()
     cleanRDD.unpersist()
     categoryBroadcast.unpersist()
 
-    logger.info("模块一执行完毕")
+    logger.info("Module 1 completed")
   }
 
   private[module] def parseLogs(dataRDD: RDD[String]): RDD[UserBehaviorLog] = {
@@ -115,7 +114,7 @@ object Module1_DataPreprocessing extends Logging {
   private def overwriteOutput(path: String): Unit = {
     val outputDir = new File(path)
     if (outputDir.exists()) {
-      logger.warn(s"输出路径已存在，先删除旧结果: $path")
+      logger.warn(s"Output path exists, removing old results: $path")
       deleteRecursively(outputDir)
     }
   }

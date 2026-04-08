@@ -5,97 +5,89 @@ import com.ecommerce.core.SparkSessionFactory
 import com.ecommerce.module._
 import com.ecommerce.util.{DataGenerator, Logging}
 
+import java.io.File
+
 /**
- * ══════════════════════════════════════════════════════════
- * 电商全路径数据分析系统 —— 主入口
- *
- * 支持按模块单独运行，方便期末大作业分模块提交演示
- *
- * 用法：
- *   spark-submit --class com.ecommerce.Main xxx.jar [模块编号]
- *
- *   参数说明：
- *     all   运行全部模块（默认）
- *     gen   仅生成模拟数据
- *     1     模块一：RDD 数据预处理
- *     2     模块二：Spark SQL 业务报表
- *     3     模块三：Streaming 实时监控
- *     4     模块四：GraphX 社交挖掘
- *     5     模块五：MLlib 行为预测
- *     6     模块六：性能调优
- *
- * 示例：
- *   spark-submit --class com.ecommerce.Main target/xxx.jar 2
- * ══════════════════════════════════════════════════════════
+ * Main entry point.
+ * This launcher is intentionally metadata-driven so future assignment wording changes
+ * can be absorbed in AppConfig with minimal code changes.
  */
 object Main extends Logging {
+
+  private val moduleRunners: Map[String, () => Unit] = Map(
+    "1" -> (() => Module1_DataPreprocessing.run()),
+    "2" -> (() => Module2_SparkSQL.run()),
+    "3" -> (() => Module3_Streaming.run()),
+    "4" -> (() => Module4_GraphX.run()),
+    "5" -> (() => Module5_MLlib.run()),
+    "6" -> (() => Module6_PerformanceTuning.run())
+  )
 
   def main(args: Array[String]): Unit = {
     AppConfig.validate()
 
     val mode = if (args.nonEmpty) args(0).trim.toLowerCase else "all"
-
     printBanner()
-
-    // 确保数据文件存在
     ensureData()
 
     try {
       mode match {
         case "gen" =>
-          logger.info("数据生成完毕，退出。")
+          logger.info("Data generated. Exit.")
 
-        case "1" =>
-          Module1_DataPreprocessing.run()
+        case "all" =>
+          runAllEnabledBatchModules()
 
-        case "2" =>
-          Module2_SparkSQL.run()
-
-        case "3" =>
-          Module3_Streaming.run()
-
-        case "4" =>
-          Module4_GraphX.run()
-
-        case "5" =>
-          Module5_MLlib.run()
-
-        case "6" =>
-          Module6_PerformanceTuning.run()
-
-        case "all" | _ =>
-          logger.info("运行全部批处理模块（默认不包含需要常驻运行的 Streaming 模块）...")
-          Module1_DataPreprocessing.run()
-          Module2_SparkSQL.run()
-          // Module3_Streaming.run()   // Streaming 需要持续运行，默认注释
-          Module4_GraphX.run()
-          Module5_MLlib.run()
-          Module6_PerformanceTuning.run()
-          logger.info("全部批处理模块执行完毕 🎉")
+        case moduleId =>
+          runSingleModule(moduleId)
       }
     } finally {
       SparkSessionFactory.stop()
     }
   }
 
+  private def runAllEnabledBatchModules(): Unit = {
+    logger.info(s"Running all configured batch modules: ${AppConfig.ALL_MODE_MODULE_IDS.mkString(", ")}")
+    AppConfig.ALL_MODE_MODULE_IDS.foreach(runSingleModule)
+    logger.info("Batch module run completed.")
+  }
+
+  private def runSingleModule(moduleId: String): Unit = {
+    if (!AppConfig.ENABLED_MODULE_IDS.contains(moduleId)) {
+      logger.warn(s"Module $moduleId is disabled by configuration, skip.")
+      return
+    }
+
+    moduleRunners.get(moduleId) match {
+      case Some(runFn) =>
+        logger.info(s"Start module $moduleId - ${AppConfig.moduleName(moduleId)}")
+        runFn()
+      case None =>
+        val supported = (moduleRunners.keys.toSeq.sorted :+ "all" :+ "gen").mkString(", ")
+        logger.warn(s"Unknown mode '$moduleId'. Supported: $supported")
+    }
+  }
+
   private def ensureData(): Unit = {
-    val dataFile = new java.io.File(AppConfig.RAW_LOG_PATH)
+    val dataFile = new File(AppConfig.RAW_LOG_PATH)
     if (!dataFile.exists()) {
-      logger.info(s"未找到数据文件，自动生成模拟数据...")
+      logger.info(s"Data file not found, generating demo data: ${AppConfig.RAW_LOG_PATH}")
       DataGenerator.generate(AppConfig.RAW_LOG_PATH)
     } else {
-      logger.info(s"数据文件已存在: ${AppConfig.RAW_LOG_PATH}")
+      logger.info(s"Data file found: ${AppConfig.RAW_LOG_PATH}")
     }
   }
 
   private def printBanner(): Unit = {
-    logger.info(
-      """
-        |╔══════════════════════════════════════════════════════════╗
-        |║         电商全路径数据分析系统  v1.0                      ║
-        |║  Spark全栈: RDD / SQL / Streaming / GraphX / MLlib       ║
-        |║  第4章 性能调优: Cache / Broadcast / Skew / Partition     ║
-        |╚══════════════════════════════════════════════════════════╝
-      """.stripMargin)
+    val moduleSummary = AppConfig.MODULE_DEFINITIONS
+      .filter(_.enabled)
+      .map(m => s"${m.id}:${m.displayName}")
+      .mkString(" | ")
+
+    logger.info("=" * 72)
+    logger.info(s"${AppConfig.PROJECT_DISPLAY_NAME} ${AppConfig.PROJECT_VERSION}")
+    logger.info(s"Domain: ${AppConfig.PROJECT_DOMAIN_LABEL}")
+    logger.info(s"Enabled modules: $moduleSummary")
+    logger.info("=" * 72)
   }
 }

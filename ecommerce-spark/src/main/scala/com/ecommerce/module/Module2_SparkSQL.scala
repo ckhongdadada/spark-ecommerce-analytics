@@ -1,20 +1,19 @@
 package com.ecommerce.module
 
 import com.ecommerce.config.AppConfig
-import com.ecommerce.core.SparkSessionFactory
+import com.ecommerce.core.{Behaviors, SparkSessionFactory}
 import com.ecommerce.util.Logging
 import org.apache.spark.sql.{DataFrame, SaveMode}
 import org.apache.spark.sql.functions._
 
 /**
- * 模块二：Spark SQL 业务报表
- * 包含转化漏斗、小时级 PV/UV 趋势和每类目热销商品分析。
+ * Module 2: Spark SQL analytics.
  */
 object Module2_SparkSQL extends Logging {
 
   def run(): Unit = {
     logger.info("=" * 60)
-    logger.info("  模块二：Spark SQL 业务报表")
+    logger.info(s"  ${AppConfig.moduleName("2")}")
     logger.info("=" * 60)
 
     val spark = SparkSessionFactory.getSession()
@@ -23,19 +22,18 @@ object Module2_SparkSQL extends Logging {
       .option("inferSchema", "true")
       .csv(AppConfig.RAW_LOG_PATH)
 
-    rawDF.printSchema()
-    logger.info(s"总记录数: ${rawDF.count()}")
+    logger.info(s"Total rows: ${rawDF.count()}")
 
     val funnelDF = buildFunnelReport(rawDF)
-    logger.info("类目转化漏斗:")
+    logger.info("Category conversion funnel:")
     funnelDF.show(20, truncate = false)
 
     val hourTrendDF = buildHourTrend(rawDF)
-    logger.info("24 小时 PV/UV 趋势:")
+    logger.info(s"Hourly ${Behaviors.VIEW.toUpperCase}/${"uv".toUpperCase} trend:")
     hourTrendDF.show(24, truncate = false)
 
     val top3DF = buildTop3ItemsByCategory(rawDF)
-    logger.info("各类目 Top3 热销商品:")
+    logger.info(s"Top 3 items per category by '${Behaviors.BUY}' count:")
     top3DF.show(30, truncate = false)
 
     funnelDF.write
@@ -54,13 +52,13 @@ object Module2_SparkSQL extends Logging {
         .option("numPartitions", AppConfig.MYSQL_PARTITIONS)
         .option("truncate", "true")
         .save()
-      logger.info("报表已写入 MySQL")
+      logger.info("Funnel report written to MySQL")
     } catch {
       case e: Exception =>
-        logger.warn(s"MySQL 写出跳过（可能未配置连接）: ${e.getMessage}")
+        logger.warn(s"MySQL write skipped: ${e.getMessage}")
     }
 
-    logger.info("模块二执行完毕")
+    logger.info("Module 2 completed")
   }
 
   private[module] def buildFunnelReport(rawDF: DataFrame): DataFrame = {
@@ -68,21 +66,21 @@ object Module2_SparkSQL extends Logging {
     rawDF.createOrReplaceTempView("user_behavior")
 
     val funnelSQL =
-      """
-        |SELECT
-        |  category,
-        |  COUNT(CASE WHEN behavior = 'pv' THEN 1 END) AS pv_cnt,
-        |  COUNT(CASE WHEN behavior = 'cart' THEN 1 END) AS cart_cnt,
-        |  COUNT(CASE WHEN behavior = 'buy' THEN 1 END) AS buy_cnt,
-        |  ROUND(
-        |    COUNT(CASE WHEN behavior = 'buy' THEN 1 END) * 100.0
-        |    / NULLIF(COUNT(CASE WHEN behavior = 'pv' THEN 1 END), 0),
-        |    2
-        |  ) AS conv_rate_pct
-        |FROM user_behavior
-        |GROUP BY category
-        |ORDER BY buy_cnt DESC, category ASC
-        |""".stripMargin
+      s"""
+         |SELECT
+         |  category,
+         |  COUNT(CASE WHEN behavior = '${Behaviors.VIEW}' THEN 1 END) AS pv_cnt,
+         |  COUNT(CASE WHEN behavior = '${Behaviors.CART}' THEN 1 END) AS cart_cnt,
+         |  COUNT(CASE WHEN behavior = '${Behaviors.BUY}' THEN 1 END) AS buy_cnt,
+         |  ROUND(
+         |    COUNT(CASE WHEN behavior = '${Behaviors.BUY}' THEN 1 END) * 100.0
+         |    / NULLIF(COUNT(CASE WHEN behavior = '${Behaviors.VIEW}' THEN 1 END), 0),
+         |    2
+         |  ) AS conv_rate_pct
+         |FROM user_behavior
+         |GROUP BY category
+         |ORDER BY buy_cnt DESC, category ASC
+         |""".stripMargin
 
     spark.sql(funnelSQL)
   }
@@ -90,7 +88,7 @@ object Module2_SparkSQL extends Logging {
   private[module] def buildHourTrend(rawDF: DataFrame): DataFrame = {
     rawDF
       .withColumn("hour", hour(from_unixtime(col("timestamp"))))
-      .filter(col("behavior") === "pv")
+      .filter(col("behavior") === Behaviors.VIEW)
       .groupBy("hour")
       .agg(
         count("*").alias("pv"),
@@ -104,21 +102,21 @@ object Module2_SparkSQL extends Logging {
     rawDF.createOrReplaceTempView("user_behavior")
 
     val top3SQL =
-      """
-        |SELECT category, itemId, buy_cnt, rk
-        |FROM (
-        |  SELECT
-        |    category,
-        |    itemId,
-        |    COUNT(*) AS buy_cnt,
-        |    RANK() OVER (PARTITION BY category ORDER BY COUNT(*) DESC) AS rk
-        |  FROM user_behavior
-        |  WHERE behavior = 'buy'
-        |  GROUP BY category, itemId
-        |) ranked
-        |WHERE rk <= 3
-        |ORDER BY category, rk, itemId
-        |""".stripMargin
+      s"""
+         |SELECT category, itemId, buy_cnt, rk
+         |FROM (
+         |  SELECT
+         |    category,
+         |    itemId,
+         |    COUNT(*) AS buy_cnt,
+         |    RANK() OVER (PARTITION BY category ORDER BY COUNT(*) DESC) AS rk
+         |  FROM user_behavior
+         |  WHERE behavior = '${Behaviors.BUY}'
+         |  GROUP BY category, itemId
+         |) ranked
+         |WHERE rk <= 3
+         |ORDER BY category, rk, itemId
+         |""".stripMargin
 
     spark.sql(top3SQL)
   }

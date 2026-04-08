@@ -1,7 +1,7 @@
 package com.ecommerce.module
 
 import com.ecommerce.config.AppConfig
-import com.ecommerce.core.SparkSessionFactory
+import com.ecommerce.core.{Behaviors, SparkSessionFactory}
 import com.ecommerce.util.Logging
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions._
@@ -13,8 +13,7 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 /**
- * 模块六：Spark 性能调优实战。
- * 该模块会输出结构化 benchmark 结果，便于答辩时结合事件日志和 Spark UI 一起说明优化效果。
+ * Module 6: performance tuning and benchmark.
  */
 object Module6_PerformanceTuning extends Logging {
 
@@ -43,11 +42,17 @@ object Module6_PerformanceTuning extends Logging {
     maxDurationMs: Long
   )
 
+  case class BenchmarkReport(
+    measurements: Seq[BenchmarkMeasurement],
+    summaries: Seq[BenchmarkSummary],
+    explainPlan: String
+  )
+
   private val timestampFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
 
   def run(): Unit = {
     logger.info("=" * 60)
-    logger.info("  模块六：Spark 性能调优实战")
+    logger.info(s"  ${AppConfig.moduleName("6")}")
     logger.info("=" * 60)
 
     val spark = SparkSessionFactory.getSession()
@@ -64,7 +69,7 @@ object Module6_PerformanceTuning extends Logging {
     val benchmarkReport = runBenchmarks(spark, rawDF)
     persistBenchmarkReport(benchmarkReport)
 
-    logger.info(s"Benchmark 汇总结果已写入: ${AppConfig.BENCHMARK_OUTPUT_PATH}")
+    logger.info(s"Benchmark results written: ${AppConfig.BENCHMARK_OUTPUT_PATH}")
     benchmarkReport.summaries.foreach { summary =>
       logger.info(
         s"  ${summary.scenario} / ${summary.variant}: " +
@@ -73,30 +78,21 @@ object Module6_PerformanceTuning extends Logging {
       )
     }
 
-    logger.info(s"Spark 事件日志目录: ${AppConfig.EVENT_LOG_DIR}")
+    logger.info(s"Event log directory (if enabled): ${AppConfig.EVENT_LOG_DIR}")
     rawDF.unpersist()
-    logger.info("模块六执行完毕")
+    logger.info("Module 6 completed")
   }
-
-  case class BenchmarkReport(
-    measurements: Seq[BenchmarkMeasurement],
-    summaries: Seq[BenchmarkSummary],
-    explainPlan: String
-  )
 
   private[module] def runBenchmarks(spark: SparkSession, rawDF: DataFrame): BenchmarkReport = {
     import spark.implicits._
 
-    val buyDFMemoryOnly = rawDF.filter($"behavior" === "buy").persist(StorageLevel.MEMORY_ONLY)
-    val buyDFMemoryAndDisk = rawDF.filter($"behavior" === "buy").persist(StorageLevel.MEMORY_AND_DISK)
-    val discountMap = Map(
-      "Electronics" -> 0.90,
-      "Clothing" -> 0.80,
-      "Food" -> 0.95,
-      "Books" -> 0.85,
-      "Sports" -> 0.88,
-      "Beauty" -> 0.75
-    )
+    val buyDFMemoryOnly = rawDF.filter($"behavior" === Behaviors.BUY).persist(StorageLevel.MEMORY_ONLY)
+    val buyDFMemoryAndDisk = rawDF.filter($"behavior" === Behaviors.BUY).persist(StorageLevel.MEMORY_AND_DISK)
+
+    val discountMap = AppConfig.DOMAIN_CATEGORIES.zipWithIndex.map { case (category, index) =>
+      val discount = 0.75 + (index % 5) * 0.05
+      category -> discount
+    }.toMap
     val discountDimDF = discountMap.toSeq.toDF("category", "discount")
 
     val measurements = Seq(
@@ -206,20 +202,18 @@ object Module6_PerformanceTuning extends Logging {
   private def buildSkewedFact(rawDF: DataFrame): DataFrame = {
     rawDF.withColumn(
       "join_key",
-      when(col("category") === "Electronics", lit("hot_category")).otherwise(col("category"))
+      when(col("category") === AppConfig.SKEW_HOT_CATEGORY, lit("hot_category")).otherwise(col("category"))
     )
   }
 
   private def buildSkewedDim(spark: SparkSession): DataFrame = {
     import spark.implicits._
-    Seq(
-      ("hot_category", "high traffic category"),
-      ("Clothing", "fashion category"),
-      ("Food", "daily category"),
-      ("Books", "content category"),
-      ("Sports", "fitness category"),
-      ("Beauty", "personal care category")
-    ).toDF("join_key", "tag")
+    AppConfig.CATEGORY_DIMENSION_TAGS.toSeq
+      .map { case (category, tag) =>
+        val joinKey = if (category == AppConfig.SKEW_HOT_CATEGORY) "hot_category" else category
+        (joinKey, tag)
+      }
+      .toDF("join_key", "tag")
   }
 
   private def buildSaltedFact(rawDF: DataFrame): DataFrame = {
@@ -227,7 +221,7 @@ object Module6_PerformanceTuning extends Logging {
     rawDF
       .withColumn(
         "base_key",
-        when(col("category") === "Electronics", lit("hot_category")).otherwise(col("category"))
+        when(col("category") === AppConfig.SKEW_HOT_CATEGORY, lit("hot_category")).otherwise(col("category"))
       )
       .withColumn("salt", (rand(42) * saltBucketCount).cast("int"))
       .withColumn("join_key", concat(col("base_key"), lit("_"), col("salt")))
@@ -235,9 +229,12 @@ object Module6_PerformanceTuning extends Logging {
 
   private def buildSaltedDim(spark: SparkSession): DataFrame = {
     import spark.implicits._
-    val keys = Seq("hot_category", "Clothing", "Food", "Books", "Sports", "Beauty")
     val saltBucketCount = 8
-    keys
+    val baseKeys = AppConfig.DOMAIN_CATEGORIES.map { category =>
+      if (category == AppConfig.SKEW_HOT_CATEGORY) "hot_category" else category
+    }
+
+    baseKeys
       .flatMap(key => (0 until saltBucketCount).map(salt => (s"${key}_$salt", key)))
       .toDF("join_key", "base_key")
   }
@@ -258,14 +255,14 @@ object Module6_PerformanceTuning extends Logging {
   }
 
   private def benchmarkReadme(basePath: Path): String = {
-    s"""性能基准结果说明
-       |====================
-       |1. measurements.csv 保存每一次 warmup / measured 运行的耗时记录。
-       |2. summaries.csv 保存每个实验场景的聚合统计结果。
-       |3. explain_plan.txt 保存模块六使用的执行计划文本。
-       |4. Spark 事件日志写入 ${Paths.get(AppConfig.EVENT_LOG_DIR).toAbsolutePath}，可配合 Spark History Server 或 Spark UI 进一步分析。
+    s"""Benchmark output notes
+       |=====================
+       |1. measurements.csv stores each warmup/measured run.
+       |2. summaries.csv stores aggregated stats per scenario.
+       |3. explain_plan.txt stores the execution plan snapshot.
+       |4. Event log is written to ${Paths.get(AppConfig.EVENT_LOG_DIR).toAbsolutePath} when environment supports it.
        |
-       |当前输出目录: ${basePath.toAbsolutePath}
+       |Output directory: ${basePath.toAbsolutePath}
        |""".stripMargin
   }
 

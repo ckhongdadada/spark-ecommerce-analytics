@@ -1,17 +1,80 @@
 package com.ecommerce.config
 
 /**
- * 全局配置对象。
- * 当前项目默认仍以本地演示配置为主，但尽量将关键路径和性能参数统一收口。
+ * Global configuration hub.
+ *
+ * To adapt this project for a different course topic, prioritize editing:
+ * 1) project display fields
+ * 2) behavior semantics
+ * 3) category semantics
+ * 4) module metadata (name / enabled / includeInAll)
  */
 object AppConfig {
 
-  // Spark 基础配置
-  val APP_NAME = "电商全路径数据分析系统"
-  val MASTER = "local[*]" // 部署到集群时可改为 yarn / spark://...
-  val TIMEZONE = "Asia/Shanghai"
+  final case class ModuleDefinition(
+    id: String,
+    displayName: String,
+    includeInAll: Boolean,
+    enabled: Boolean = true
+  )
 
-  // 数据路径配置
+  // Project identity
+  val PROJECT_DISPLAY_NAME = sys.env.getOrElse("PROJECT_DISPLAY_NAME", "电商全路径数据分析系统")
+  val PROJECT_VERSION = sys.env.getOrElse("PROJECT_VERSION", "v1.0")
+  val PROJECT_DOMAIN_LABEL = sys.env.getOrElse("PROJECT_DOMAIN_LABEL", "电商")
+  val APP_NAME = PROJECT_DISPLAY_NAME
+
+  // Spark base config
+  val MASTER = sys.env.getOrElse("SPARK_MASTER", "local[*]")
+  val TIMEZONE = sys.env.getOrElse("SPARK_TIMEZONE", "Asia/Shanghai")
+
+  // Domain semantics: behavior labels
+  val BEHAVIOR_VIEW = sys.env.getOrElse("BEHAVIOR_VIEW", "pv")
+  val BEHAVIOR_BUY = sys.env.getOrElse("BEHAVIOR_BUY", "buy")
+  val BEHAVIOR_CART = sys.env.getOrElse("BEHAVIOR_CART", "cart")
+  val BEHAVIOR_FAVORITE = sys.env.getOrElse("BEHAVIOR_FAVORITE", "fav")
+  val VALID_BEHAVIORS: Set[String] =
+    Set(BEHAVIOR_VIEW, BEHAVIOR_BUY, BEHAVIOR_CART, BEHAVIOR_FAVORITE)
+
+  // Domain semantics: categories and demo dimensions
+  val DOMAIN_CATEGORIES: Vector[String] =
+    Vector("Electronics", "Clothing", "Food", "Books", "Sports", "Beauty")
+
+  // Categories used by demo filters in Module 1
+  val HIGHLIGHT_CATEGORIES: Set[String] = DOMAIN_CATEGORIES.take(3).toSet
+
+  // Category-to-item generator setup
+  val CATEGORY_ITEM_PREFIX: Map[String, String] = Map(
+    "Electronics" -> "E",
+    "Clothing" -> "C",
+    "Food" -> "F",
+    "Books" -> "B",
+    "Sports" -> "S",
+    "Beauty" -> "BE"
+  )
+
+  val CATEGORY_ITEM_SIZE: Map[String, Int] = Map(
+    "Electronics" -> 1500,
+    "Clothing" -> 1500,
+    "Food" -> 1200,
+    "Books" -> 1200,
+    "Sports" -> 1000,
+    "Beauty" -> 1000
+  )
+
+  // Performance module dimension labels
+  val CATEGORY_DIMENSION_TAGS: Map[String, String] = Map(
+    "Electronics" -> "high traffic category",
+    "Clothing" -> "fashion category",
+    "Food" -> "daily category",
+    "Books" -> "content category",
+    "Sports" -> "fitness category",
+    "Beauty" -> "personal care category"
+  )
+
+  val SKEW_HOT_CATEGORY: String = DOMAIN_CATEGORIES.headOption.getOrElse("Electronics")
+
+  // Paths
   val DATA_ROOT = "data/mock"
   val RAW_LOG_PATH = s"$DATA_ROOT/user_behavior_log.csv"
   val CLEAN_OUTPUT_PATH = "output/cleaned"
@@ -22,7 +85,7 @@ object AppConfig {
   val BENCHMARK_OUTPUT_PATH = "output/benchmark"
   val EVENT_LOG_DIR = "output/eventlog"
 
-  // MySQL 配置
+  // MySQL
   val MYSQL_URL = "jdbc:mysql://localhost:3306/ecommerce?useSSL=false&serverTimezone=UTC"
   val MYSQL_USER = sys.env.getOrElse("MYSQL_USER", "root")
   val MYSQL_PASSWORD = sys.env.getOrElse("MYSQL_PASSWORD", "123456")
@@ -30,7 +93,7 @@ object AppConfig {
   val MYSQL_BATCH_SIZE = 1000
   val MYSQL_PARTITIONS = 4
 
-  // Streaming 配置
+  // Streaming
   val KAFKA_BROKERS = "localhost:9092"
   val KAFKA_TOPIC = "user-behavior"
   val STREAM_WINDOW = 60
@@ -39,13 +102,13 @@ object AppConfig {
   val SOCKET_HOST = "localhost"
   val SOCKET_PORT = 9999
 
-  // MLlib 配置
+  // MLlib
   val ML_TRAIN_RATIO = 0.8
   val ML_TEST_RATIO = 0.2
   val ML_MAX_ITER = 100
   val ML_REG_PARAM = 0.01
 
-  // 性能调优 / 基准测试配置
+  // Performance / benchmark
   val SHUFFLE_PARTITIONS = 200
   val DEFAULT_PARALLELISM = 4
   val EXECUTOR_MEMORY = "2g"
@@ -55,17 +118,50 @@ object AppConfig {
   val BENCHMARK_WARMUP_RUNS = 1
   val BENCHMARK_MEASURED_RUNS = 5
 
+  // Module catalog: adjust names/switches here to match final assignment wording
+  val MODULE_DEFINITIONS: Seq[ModuleDefinition] = Seq(
+    ModuleDefinition("1", "RDD 数据预处理", includeInAll = true),
+    ModuleDefinition("2", "Spark SQL 报表分析", includeInAll = true),
+    ModuleDefinition("3", "Structured Streaming 实时统计", includeInAll = false),
+    ModuleDefinition("4", "GraphX 图分析", includeInAll = true),
+    ModuleDefinition("5", "MLlib 行为预测", includeInAll = true),
+    ModuleDefinition("6", "性能调优与 Benchmark", includeInAll = true)
+  )
+
+  val MODULE_NAME_BY_ID: Map[String, String] =
+    MODULE_DEFINITIONS.map(m => m.id -> m.displayName).toMap
+
+  val ENABLED_MODULE_IDS: Set[String] =
+    MODULE_DEFINITIONS.filter(_.enabled).map(_.id).toSet
+
+  val ALL_MODE_MODULE_IDS: Seq[String] =
+    MODULE_DEFINITIONS.filter(m => m.enabled && m.includeInAll).map(_.id)
+
+  def moduleName(id: String): String = MODULE_NAME_BY_ID.getOrElse(id, s"Module-$id")
+
   def validate(): Unit = {
-    require(STREAM_WINDOW > 0, s"STREAM_WINDOW 必须大于 0，当前值: $STREAM_WINDOW")
-    require(STREAM_SLIDE > 0, s"STREAM_SLIDE 必须大于 0，当前值: $STREAM_SLIDE")
-    require(SOCKET_PORT > 0 && SOCKET_PORT <= 65535, s"SOCKET_PORT 必须在 1-65535 范围内，当前值: $SOCKET_PORT")
-    require(ML_TRAIN_RATIO > 0 && ML_TRAIN_RATIO < 1, s"ML_TRAIN_RATIO 必须在 (0, 1) 范围内，当前值: $ML_TRAIN_RATIO")
-    require(BROADCAST_THRESHOLD_MB > 0, s"BROADCAST_THRESHOLD_MB 必须大于 0，当前值: $BROADCAST_THRESHOLD_MB")
-    require(SHUFFLE_PARTITIONS > 0, s"SHUFFLE_PARTITIONS 必须大于 0，当前值: $SHUFFLE_PARTITIONS")
-    require(DEFAULT_PARALLELISM > 0, s"DEFAULT_PARALLELISM 必须大于 0，当前值: $DEFAULT_PARALLELISM")
-    require(MYSQL_BATCH_SIZE > 0, s"MYSQL_BATCH_SIZE 必须大于 0，当前值: $MYSQL_BATCH_SIZE")
-    require(MYSQL_PARTITIONS > 0, s"MYSQL_PARTITIONS 必须大于 0，当前值: $MYSQL_PARTITIONS")
-    require(BENCHMARK_WARMUP_RUNS >= 0, s"BENCHMARK_WARMUP_RUNS 不能小于 0，当前值: $BENCHMARK_WARMUP_RUNS")
-    require(BENCHMARK_MEASURED_RUNS > 0, s"BENCHMARK_MEASURED_RUNS 必须大于 0，当前值: $BENCHMARK_MEASURED_RUNS")
+    require(PROJECT_DISPLAY_NAME.nonEmpty, "PROJECT_DISPLAY_NAME cannot be empty")
+    require(VALID_BEHAVIORS.size == 4, s"VALID_BEHAVIORS should contain 4 unique values, got: ${VALID_BEHAVIORS.mkString(",")}")
+    require(DOMAIN_CATEGORIES.nonEmpty, "DOMAIN_CATEGORIES cannot be empty")
+    require(CATEGORY_ITEM_PREFIX.keySet == DOMAIN_CATEGORIES.toSet, "CATEGORY_ITEM_PREFIX keys must match DOMAIN_CATEGORIES")
+    require(CATEGORY_ITEM_SIZE.keySet == DOMAIN_CATEGORIES.toSet, "CATEGORY_ITEM_SIZE keys must match DOMAIN_CATEGORIES")
+    require(CATEGORY_DIMENSION_TAGS.keySet == DOMAIN_CATEGORIES.toSet, "CATEGORY_DIMENSION_TAGS keys must match DOMAIN_CATEGORIES")
+    require(SKEW_HOT_CATEGORY.nonEmpty, "SKEW_HOT_CATEGORY cannot be empty")
+
+    require(STREAM_WINDOW > 0, s"STREAM_WINDOW must be > 0, got: $STREAM_WINDOW")
+    require(STREAM_SLIDE > 0, s"STREAM_SLIDE must be > 0, got: $STREAM_SLIDE")
+    require(SOCKET_PORT > 0 && SOCKET_PORT <= 65535, s"SOCKET_PORT must be in 1..65535, got: $SOCKET_PORT")
+    require(ML_TRAIN_RATIO > 0 && ML_TRAIN_RATIO < 1, s"ML_TRAIN_RATIO must be in (0,1), got: $ML_TRAIN_RATIO")
+    require(BROADCAST_THRESHOLD_MB > 0, s"BROADCAST_THRESHOLD_MB must be > 0, got: $BROADCAST_THRESHOLD_MB")
+    require(SHUFFLE_PARTITIONS > 0, s"SHUFFLE_PARTITIONS must be > 0, got: $SHUFFLE_PARTITIONS")
+    require(DEFAULT_PARALLELISM > 0, s"DEFAULT_PARALLELISM must be > 0, got: $DEFAULT_PARALLELISM")
+    require(MYSQL_BATCH_SIZE > 0, s"MYSQL_BATCH_SIZE must be > 0, got: $MYSQL_BATCH_SIZE")
+    require(MYSQL_PARTITIONS > 0, s"MYSQL_PARTITIONS must be > 0, got: $MYSQL_PARTITIONS")
+    require(BENCHMARK_WARMUP_RUNS >= 0, s"BENCHMARK_WARMUP_RUNS must be >= 0, got: $BENCHMARK_WARMUP_RUNS")
+    require(BENCHMARK_MEASURED_RUNS > 0, s"BENCHMARK_MEASURED_RUNS must be > 0, got: $BENCHMARK_MEASURED_RUNS")
+
+    val moduleIds = MODULE_DEFINITIONS.map(_.id)
+    require(moduleIds.distinct.size == moduleIds.size, s"MODULE_DEFINITIONS contains duplicate ids: ${moduleIds.mkString(",")}")
+    require(ALL_MODE_MODULE_IDS.forall(ENABLED_MODULE_IDS.contains), "ALL_MODE_MODULE_IDS must be subset of ENABLED_MODULE_IDS")
   }
 }
