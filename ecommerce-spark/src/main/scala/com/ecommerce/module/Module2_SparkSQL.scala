@@ -1,5 +1,6 @@
 package com.ecommerce.module
 
+import com.ecommerce.analytics.{FunnelAnalysis, FunnelVisualization}
 import com.ecommerce.config.AppConfig
 import com.ecommerce.core.{Behaviors, SparkSessionFactory}
 import com.ecommerce.util.{DataQualityGuard, Logging}
@@ -9,13 +10,13 @@ import org.apache.spark.sql.functions._
 /**
  * Module 2: Spark SQL analytics.
  *
- * Produces three reports:
+ * Produces comprehensive reports:
  *   1) Category conversion funnel   -> report_funnel
  *   2) Hourly PV/UV trend           -> report_hour_trend
  *   3) Top-3 items per category     -> report_top3_items
+ *   4) Advanced funnel analysis     -> funnel_* (全局/分类/时段/用户分群/流失分析)
  *
- * All reports are persisted to Parquet under SQL_OUTPUT_PATH and,
- * if MySQL is reachable, also written via JDBC.
+ * All reports are persisted to configured format (Parquet/Delta) and MySQL.
  */
 object Module2_SparkSQL extends Logging {
 
@@ -64,12 +65,71 @@ object Module2_SparkSQL extends Logging {
       .format(format)
       .save(s"${AppConfig.SQL_OUTPUT_PATH}/top3_items")
 
+    // ---- Advanced Funnel Analysis ----
+    logger.info("=" * 60)
+    logger.info("  Advanced Funnel Analysis: 曝光 -> 点击 -> 加购 -> 支付")
+    logger.info("=" * 60)
+
+    val globalFunnel = FunnelAnalysis.buildGlobalFunnel(rawDF)
+    logger.info("Global Funnel (整体漏斗):")
+    globalFunnel.show(truncate = false)
+
+    val categoryFunnel = FunnelAnalysis.buildCategoryFunnel(rawDF)
+    logger.info("Category Funnel (分类漏斗):")
+    categoryFunnel.show(truncate = false)
+
+    val hourlyFunnel = FunnelAnalysis.buildHourlyFunnel(rawDF)
+    logger.info("Hourly Funnel (时段漏斗):")
+    hourlyFunnel.show(24, truncate = false)
+
+    val userSegmentFunnel = FunnelAnalysis.buildUserSegmentFunnel(rawDF)
+    logger.info("User Segment Funnel (用户分群漏斗):")
+    userSegmentFunnel.show(truncate = false)
+
+    val lossAnalysis = FunnelAnalysis.buildLossAnalysis(rawDF)
+    logger.info("Loss Analysis (流失分析):")
+    lossAnalysis.show(truncate = false)
+
+    // 保存漏斗分析结果
+    FunnelAnalysis.saveFunnelReports(
+      globalFunnel,
+      categoryFunnel,
+      hourlyFunnel,
+      userSegmentFunnel,
+      lossAnalysis,
+      s"${AppConfig.SQL_OUTPUT_PATH}/funnel_analysis",
+      format
+    )
+
+    // 生成可视化配置
+    FunnelVisualization.saveVisualizationConfigs(
+      globalFunnel,
+      categoryFunnel,
+      s"${AppConfig.SQL_OUTPUT_PATH}/funnel_analysis/visualization"
+    )
+
+    // 打印漏斗分析摘要
+    FunnelVisualization.printFunnelSummary(
+      globalFunnel,
+      categoryFunnel,
+      lossAnalysis
+    )
+
     // ---- MySQL JDBC persistence ----
     try {
       writeToMySQL(funnelDF, AppConfig.MYSQL_TABLE_FUNNEL)
       writeToMySQL(hourTrendDF, AppConfig.MYSQL_TABLE_TREND)
       writeToMySQL(top3DF, AppConfig.MYSQL_TABLE_TOP3)
       logger.info("All 3 SQL reports written to MySQL successfully.")
+      
+      // 保存漏斗分析到 MySQL
+      FunnelAnalysis.saveFunnelReportsToMySQL(
+        globalFunnel,
+        categoryFunnel,
+        hourlyFunnel,
+        userSegmentFunnel,
+        lossAnalysis
+      )
     } catch {
       case e: Exception =>
         logger.warn(s"MySQL write skipped or partially failed: ${e.getMessage}")
