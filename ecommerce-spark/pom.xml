@@ -83,6 +83,13 @@
             <version>8.0.33</version>
         </dependency>
 
+        <!-- Delta Lake -->
+        <dependency>
+            <groupId>io.delta</groupId>
+            <artifactId>delta-spark_${scala.binary.version}</artifactId>
+            <version>3.0.0</version>
+        </dependency>
+
         <!-- Logging API -->
         <dependency>
             <groupId>org.slf4j</groupId>

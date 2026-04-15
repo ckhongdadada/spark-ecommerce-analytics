@@ -22,6 +22,7 @@ object AppConfig {
   private val SupportedEnvironments = Set("local", "dev", "prod")
   private val SupportedStreamSources = Set("socket", "kafka")
   private val SupportedStreamSinks = Set("file", "kafka", "mysql")
+  private val SupportedDataFormats = Set("parquet", "delta")
 
   private def readRaw(key: String): Option[String] = {
     sys.props.get(key).orElse(sys.env.get(key)).map(_.trim).filter(_.nonEmpty)
@@ -63,6 +64,9 @@ object AppConfig {
   // Spark base config
   val MASTER = cfgString("SPARK_MASTER", byEnv("local[*]", "local[4]", "yarn"))
   val TIMEZONE = cfgString("SPARK_TIMEZONE", "Asia/Shanghai")
+
+  // Data format: parquet or delta
+  val DATA_FORMAT: String = cfgString("DATA_FORMAT", "parquet").toLowerCase
 
   // Domain semantics: behavior labels
   val BEHAVIOR_VIEW = cfgString("BEHAVIOR_VIEW", "pv")
@@ -222,6 +226,7 @@ object AppConfig {
   def validate(): Unit = {
     require(SupportedEnvironments.contains(APP_ENV), s"APP_ENV must be one of ${SupportedEnvironments.mkString(",")}, got: $APP_ENV")
     require(PROJECT_DISPLAY_NAME.nonEmpty, "PROJECT_DISPLAY_NAME cannot be empty")
+    require(SupportedDataFormats.contains(DATA_FORMAT), s"DATA_FORMAT must be one of ${SupportedDataFormats.mkString(",")}, got: $DATA_FORMAT")
     require(VALID_BEHAVIORS.size == 4, s"VALID_BEHAVIORS should contain 4 unique values, got: ${VALID_BEHAVIORS.mkString(",")}")
     require(DOMAIN_CATEGORIES.nonEmpty, "DOMAIN_CATEGORIES cannot be empty")
     require(CATEGORY_ITEM_PREFIX.keySet == DOMAIN_CATEGORIES.toSet, "CATEGORY_ITEM_PREFIX keys must match DOMAIN_CATEGORIES")

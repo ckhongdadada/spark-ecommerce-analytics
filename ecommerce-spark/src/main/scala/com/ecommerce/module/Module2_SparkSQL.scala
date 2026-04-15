@@ -45,18 +45,24 @@ object Module2_SparkSQL extends Logging {
     logger.info(s"Top 3 items per category by '${Behaviors.BUY}' count:")
     top3DF.show(30, truncate = false)
 
-    // ---- Parquet persistence ----
+    // ---- File persistence (Parquet or Delta) ----
+    val format = AppConfig.DATA_FORMAT
+    logger.info(s"Writing reports in $format format")
+
     funnelDF.write
       .mode(SaveMode.Overwrite)
-      .parquet(s"${AppConfig.SQL_OUTPUT_PATH}/funnel_report")
+      .format(format)
+      .save(s"${AppConfig.SQL_OUTPUT_PATH}/funnel_report")
 
     hourTrendDF.write
       .mode(SaveMode.Overwrite)
-      .parquet(s"${AppConfig.SQL_OUTPUT_PATH}/hour_trend")
+      .format(format)
+      .save(s"${AppConfig.SQL_OUTPUT_PATH}/hour_trend")
 
     top3DF.write
       .mode(SaveMode.Overwrite)
-      .parquet(s"${AppConfig.SQL_OUTPUT_PATH}/top3_items")
+      .format(format)
+      .save(s"${AppConfig.SQL_OUTPUT_PATH}/top3_items")
 
     // ---- MySQL JDBC persistence ----
     try {
