@@ -21,7 +21,7 @@ object AppConfig {
 
   private val SupportedEnvironments = Set("local", "dev", "prod")
   private val SupportedStreamSources = Set("socket", "kafka")
-  private val SupportedStreamSinks = Set("file", "kafka")
+  private val SupportedStreamSinks = Set("file", "kafka", "mysql")
 
   private def readRaw(key: String): Option[String] = {
     sys.props.get(key).orElse(sys.env.get(key)).map(_.trim).filter(_.nonEmpty)
@@ -132,7 +132,10 @@ object AppConfig {
   val MYSQL_URL = cfgString("MYSQL_URL", "jdbc:mysql://localhost:3306/ecommerce?useSSL=false&serverTimezone=UTC")
   val MYSQL_USER = cfgString("MYSQL_USER", "root")
   val MYSQL_PASSWORD = cfgString("MYSQL_PASSWORD", "123456")
-  val MYSQL_TABLE = cfgString("MYSQL_TABLE", "sales_report")
+  val MYSQL_TABLE_FUNNEL = cfgString("MYSQL_TABLE_FUNNEL", "report_funnel")
+  val MYSQL_TABLE_TREND = cfgString("MYSQL_TABLE_TREND", "report_hour_trend")
+  val MYSQL_TABLE_TOP3 = cfgString("MYSQL_TABLE_TOP3", "report_top3_items")
+  val MYSQL_TABLE_STREAM_METRICS = cfgString("MYSQL_TABLE_STREAM_METRICS", "stream_metrics")
   val MYSQL_BATCH_SIZE = cfgInt("MYSQL_BATCH_SIZE", 1000)
   val MYSQL_PARTITIONS = cfgInt("MYSQL_PARTITIONS", 4)
 

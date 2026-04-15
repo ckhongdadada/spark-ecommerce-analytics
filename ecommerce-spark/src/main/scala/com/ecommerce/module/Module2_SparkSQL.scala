@@ -8,6 +8,14 @@ import org.apache.spark.sql.functions._
 
 /**
  * Module 2: Spark SQL analytics.
+ *
+ * Produces three reports:
+ *   1) Category conversion funnel   -> report_funnel
+ *   2) Hourly PV/UV trend           -> report_hour_trend
+ *   3) Top-3 items per category     -> report_top3_items
+ *
+ * All reports are persisted to Parquet under SQL_OUTPUT_PATH and,
+ * if MySQL is reachable, also written via JDBC.
  */
 object Module2_SparkSQL extends Logging {
 
@@ -37,30 +45,51 @@ object Module2_SparkSQL extends Logging {
     logger.info(s"Top 3 items per category by '${Behaviors.BUY}' count:")
     top3DF.show(30, truncate = false)
 
+    // ---- Parquet persistence ----
     funnelDF.write
       .mode(SaveMode.Overwrite)
       .parquet(s"${AppConfig.SQL_OUTPUT_PATH}/funnel_report")
 
+    hourTrendDF.write
+      .mode(SaveMode.Overwrite)
+      .parquet(s"${AppConfig.SQL_OUTPUT_PATH}/hour_trend")
+
+    top3DF.write
+      .mode(SaveMode.Overwrite)
+      .parquet(s"${AppConfig.SQL_OUTPUT_PATH}/top3_items")
+
+    // ---- MySQL JDBC persistence ----
     try {
-      funnelDF.write
-        .mode(SaveMode.Overwrite)
-        .format("jdbc")
-        .option("url", AppConfig.MYSQL_URL)
-        .option("dbtable", AppConfig.MYSQL_TABLE)
-        .option("user", AppConfig.MYSQL_USER)
-        .option("password", AppConfig.MYSQL_PASSWORD)
-        .option("batchsize", AppConfig.MYSQL_BATCH_SIZE)
-        .option("numPartitions", AppConfig.MYSQL_PARTITIONS)
-        .option("truncate", "true")
-        .save()
-      logger.info("Funnel report written to MySQL")
+      writeToMySQL(funnelDF, AppConfig.MYSQL_TABLE_FUNNEL)
+      writeToMySQL(hourTrendDF, AppConfig.MYSQL_TABLE_TREND)
+      writeToMySQL(top3DF, AppConfig.MYSQL_TABLE_TOP3)
+      logger.info("All 3 SQL reports written to MySQL successfully.")
     } catch {
       case e: Exception =>
-        logger.warn(s"MySQL write skipped: ${e.getMessage}")
+        logger.warn(s"MySQL write skipped or partially failed: ${e.getMessage}")
     }
 
     logger.info("Module 2 completed")
   }
+
+  // --------------- JDBC helper ---------------
+
+  private def writeToMySQL(df: DataFrame, table: String): Unit = {
+    df.write
+      .mode(SaveMode.Overwrite)
+      .format("jdbc")
+      .option("url", AppConfig.MYSQL_URL)
+      .option("dbtable", table)
+      .option("user", AppConfig.MYSQL_USER)
+      .option("password", AppConfig.MYSQL_PASSWORD)
+      .option("batchsize", AppConfig.MYSQL_BATCH_SIZE)
+      .option("numPartitions", AppConfig.MYSQL_PARTITIONS)
+      .option("truncate", "true")
+      .save()
+    logger.info(s"Table '$table' written to MySQL.")
+  }
+
+  // --------------- Report builders ---------------
 
   private[module] def buildFunnelReport(rawDF: DataFrame): DataFrame = {
     val spark = rawDF.sparkSession

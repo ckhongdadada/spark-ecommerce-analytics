@@ -3,7 +3,7 @@ package com.ecommerce.module
 import com.ecommerce.config.AppConfig
 import com.ecommerce.core.{Behaviors, SparkSessionFactory}
 import com.ecommerce.util.{DataQualityGuard, Logging}
-import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.{DataFrame, SaveMode}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.streaming.{StreamingQuery, Trigger}
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
@@ -12,9 +12,10 @@ import org.apache.spark.sql.types.{StringType, StructField, StructType}
  * Module 3: Structured Streaming.
  *
  * Production-oriented improvements:
- * 1) source/sink fully config-driven
+ * 1) source/sink fully config-driven (file / kafka / mysql)
  * 2) valid/invalid stream split with durable invalid sink
  * 3) window-level quality alerts persisted to file sink
+ * 4) MySQL foreachBatch sink for dashboard integration
  */
 object Module3_Streaming extends Logging {
 
@@ -174,6 +175,8 @@ object Module3_Streaming extends Logging {
       )
   }
 
+  // --------------- Sink writers ---------------
+
   private def writeMetricsSink(df: DataFrame, sourceTag: String): StreamingQuery = {
     val checkpoint = s"${AppConfig.CHECKPOINT_PATH}/${sourceTag}_metrics_${AppConfig.STREAM_SINK}"
     AppConfig.STREAM_SINK match {
@@ -201,6 +204,14 @@ object Module3_Streaming extends Logging {
           .trigger(Trigger.ProcessingTime(AppConfig.STREAM_TRIGGER_INTERVAL))
           .start()
 
+      case "mysql" =>
+        writeMySQLSink(
+          df,
+          AppConfig.MYSQL_TABLE_STREAM_METRICS,
+          checkpoint,
+          s"${sourceTag}_metrics_mysql"
+        )
+
       case _ =>
         writeFileSink(
           df,
@@ -209,6 +220,41 @@ object Module3_Streaming extends Logging {
           s"${sourceTag}_metrics_file"
         )
     }
+  }
+
+  /**
+   * MySQL sink via foreachBatch.
+   *
+   * Each micro-batch is written to MySQL using JDBC append mode,
+   * enabling real-time dashboard queries.
+   */
+  private def writeMySQLSink(
+    df: DataFrame,
+    table: String,
+    checkpointPath: String,
+    queryName: String
+  ): StreamingQuery = {
+    df.writeStream
+      .outputMode("append")
+      .option("checkpointLocation", checkpointPath)
+      .queryName(queryName)
+      .trigger(Trigger.ProcessingTime(AppConfig.STREAM_TRIGGER_INTERVAL))
+      .foreachBatch { (batchDF: DataFrame, batchId: Long) =>
+        if (!batchDF.isEmpty) {
+          batchDF.write
+            .mode(SaveMode.Append)
+            .format("jdbc")
+            .option("url", AppConfig.MYSQL_URL)
+            .option("dbtable", table)
+            .option("user", AppConfig.MYSQL_USER)
+            .option("password", AppConfig.MYSQL_PASSWORD)
+            .option("batchsize", AppConfig.MYSQL_BATCH_SIZE)
+            .option("numPartitions", AppConfig.MYSQL_PARTITIONS)
+            .save()
+          logger.info(s"Batch $batchId: ${batchDF.count()} rows written to MySQL table '$table'.")
+        }
+      }
+      .start()
   }
 
   private def writeFileSink(df: DataFrame, outputPath: String, checkpointPath: String, queryName: String): StreamingQuery = {
