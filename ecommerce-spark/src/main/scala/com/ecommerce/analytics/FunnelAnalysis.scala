@@ -10,7 +10,7 @@ import org.apache.spark.sql.expressions.Window
 /**
  * 用户行为漏斗分析组件
  * 
- * 实现完整的"曝光 -> 点击 -> 加购 -> 支付"四步转化率分析
+ * 实现完整的"浏览 -> 收藏 -> 加购 -> 支付"四步转化率分析
  * 提供多维度漏斗分析：
  * 1. 全局漏斗：整体转化情况
  * 2. 分类漏斗：按商品类目分析
@@ -34,11 +34,11 @@ object FunnelAnalysis extends Logging {
          |SELECT
          |  'Global' AS dimension,
          |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.VIEW}' THEN userId END) AS step1_exposure_users,
-         |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.VIEW}' THEN userId END) AS step2_click_users,
+         |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.FAVORITE}' THEN userId END) AS step2_click_users,
          |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.CART}' THEN userId END) AS step3_cart_users,
          |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.BUY}' THEN userId END) AS step4_buy_users,
          |  COUNT(CASE WHEN behavior = '${Behaviors.VIEW}' THEN 1 END) AS step1_exposure_events,
-         |  COUNT(CASE WHEN behavior = '${Behaviors.VIEW}' THEN 1 END) AS step2_click_events,
+         |  COUNT(CASE WHEN behavior = '${Behaviors.FAVORITE}' THEN 1 END) AS step2_click_events,
          |  COUNT(CASE WHEN behavior = '${Behaviors.CART}' THEN 1 END) AS step3_cart_events,
          |  COUNT(CASE WHEN behavior = '${Behaviors.BUY}' THEN 1 END) AS step4_buy_events
          |FROM user_behavior
@@ -49,19 +49,19 @@ object FunnelAnalysis extends Logging {
     // 计算转化率和流失率
     baseDF
       .withColumn("step1_to_step2_rate", 
-        round(col("step2_click_users") * 100.0 / nullif(col("step1_exposure_users"), 0), 2))
+        round(col("step2_click_users") * 100.0 / expr("nullif(step1_exposure_users, 0)"), 2))
       .withColumn("step2_to_step3_rate", 
-        round(col("step3_cart_users") * 100.0 / nullif(col("step2_click_users"), 0), 2))
+        round(col("step3_cart_users") * 100.0 / expr("nullif(step2_click_users, 0)"), 2))
       .withColumn("step3_to_step4_rate", 
-        round(col("step4_buy_users") * 100.0 / nullif(col("step3_cart_users"), 0), 2))
+        round(col("step4_buy_users") * 100.0 / expr("nullif(step3_cart_users, 0)"), 2))
       .withColumn("overall_conversion_rate", 
-        round(col("step4_buy_users") * 100.0 / nullif(col("step1_exposure_users"), 0), 2))
+        round(col("step4_buy_users") * 100.0 / expr("nullif(step1_exposure_users, 0)"), 2))
       .withColumn("step1_to_step2_loss_rate", 
-        round((col("step1_exposure_users") - col("step2_click_users")) * 100.0 / nullif(col("step1_exposure_users"), 0), 2))
+        round((col("step1_exposure_users") - col("step2_click_users")) * 100.0 / expr("nullif(step1_exposure_users, 0)"), 2))
       .withColumn("step2_to_step3_loss_rate", 
-        round((col("step2_click_users") - col("step3_cart_users")) * 100.0 / nullif(col("step2_click_users"), 0), 2))
+        round((col("step2_click_users") - col("step3_cart_users")) * 100.0 / expr("nullif(step2_click_users, 0)"), 2))
       .withColumn("step3_to_step4_loss_rate", 
-        round((col("step3_cart_users") - col("step4_buy_users")) * 100.0 / nullif(col("step3_cart_users"), 0), 2))
+        round((col("step3_cart_users") - col("step4_buy_users")) * 100.0 / expr("nullif(step3_cart_users, 0)"), 2))
   }
 
   /**
@@ -79,11 +79,11 @@ object FunnelAnalysis extends Logging {
          |SELECT
          |  category AS dimension,
          |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.VIEW}' THEN userId END) AS step1_exposure_users,
-         |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.VIEW}' THEN userId END) AS step2_click_users,
+         |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.FAVORITE}' THEN userId END) AS step2_click_users,
          |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.CART}' THEN userId END) AS step3_cart_users,
          |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.BUY}' THEN userId END) AS step4_buy_users,
          |  COUNT(CASE WHEN behavior = '${Behaviors.VIEW}' THEN 1 END) AS step1_exposure_events,
-         |  COUNT(CASE WHEN behavior = '${Behaviors.VIEW}' THEN 1 END) AS step2_click_events,
+         |  COUNT(CASE WHEN behavior = '${Behaviors.FAVORITE}' THEN 1 END) AS step2_click_events,
          |  COUNT(CASE WHEN behavior = '${Behaviors.CART}' THEN 1 END) AS step3_cart_events,
          |  COUNT(CASE WHEN behavior = '${Behaviors.BUY}' THEN 1 END) AS step4_buy_events
          |FROM user_behavior
@@ -95,19 +95,19 @@ object FunnelAnalysis extends Logging {
     
     baseDF
       .withColumn("step1_to_step2_rate", 
-        round(col("step2_click_users") * 100.0 / nullif(col("step1_exposure_users"), 0), 2))
+        round(col("step2_click_users") * 100.0 / expr("nullif(step1_exposure_users, 0)"), 2))
       .withColumn("step2_to_step3_rate", 
-        round(col("step3_cart_users") * 100.0 / nullif(col("step2_click_users"), 0), 2))
+        round(col("step3_cart_users") * 100.0 / expr("nullif(step2_click_users, 0)"), 2))
       .withColumn("step3_to_step4_rate", 
-        round(col("step4_buy_users") * 100.0 / nullif(col("step3_cart_users"), 0), 2))
+        round(col("step4_buy_users") * 100.0 / expr("nullif(step3_cart_users, 0)"), 2))
       .withColumn("overall_conversion_rate", 
-        round(col("step4_buy_users") * 100.0 / nullif(col("step1_exposure_users"), 0), 2))
+        round(col("step4_buy_users") * 100.0 / expr("nullif(step1_exposure_users, 0)"), 2))
       .withColumn("step1_to_step2_loss_rate", 
-        round((col("step1_exposure_users") - col("step2_click_users")) * 100.0 / nullif(col("step1_exposure_users"), 0), 2))
+        round((col("step1_exposure_users") - col("step2_click_users")) * 100.0 / expr("nullif(step1_exposure_users, 0)"), 2))
       .withColumn("step2_to_step3_loss_rate", 
-        round((col("step2_click_users") - col("step3_cart_users")) * 100.0 / nullif(col("step2_click_users"), 0), 2))
+        round((col("step2_click_users") - col("step3_cart_users")) * 100.0 / expr("nullif(step2_click_users, 0)"), 2))
       .withColumn("step3_to_step4_loss_rate", 
-        round((col("step3_cart_users") - col("step4_buy_users")) * 100.0 / nullif(col("step3_cart_users"), 0), 2))
+        round((col("step3_cart_users") - col("step4_buy_users")) * 100.0 / expr("nullif(step3_cart_users, 0)"), 2))
   }
 
   /**
@@ -127,11 +127,11 @@ object FunnelAnalysis extends Logging {
          |SELECT
          |  CAST(hour AS STRING) AS dimension,
          |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.VIEW}' THEN userId END) AS step1_exposure_users,
-         |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.VIEW}' THEN userId END) AS step2_click_users,
+         |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.FAVORITE}' THEN userId END) AS step2_click_users,
          |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.CART}' THEN userId END) AS step3_cart_users,
          |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.BUY}' THEN userId END) AS step4_buy_users,
          |  COUNT(CASE WHEN behavior = '${Behaviors.VIEW}' THEN 1 END) AS step1_exposure_events,
-         |  COUNT(CASE WHEN behavior = '${Behaviors.VIEW}' THEN 1 END) AS step2_click_events,
+         |  COUNT(CASE WHEN behavior = '${Behaviors.FAVORITE}' THEN 1 END) AS step2_click_events,
          |  COUNT(CASE WHEN behavior = '${Behaviors.CART}' THEN 1 END) AS step3_cart_events,
          |  COUNT(CASE WHEN behavior = '${Behaviors.BUY}' THEN 1 END) AS step4_buy_events
          |FROM user_behavior_hourly
@@ -143,13 +143,13 @@ object FunnelAnalysis extends Logging {
     
     baseDF
       .withColumn("step1_to_step2_rate", 
-        round(col("step2_click_users") * 100.0 / nullif(col("step1_exposure_users"), 0), 2))
+        round(col("step2_click_users") * 100.0 / expr("nullif(step1_exposure_users, 0)"), 2))
       .withColumn("step2_to_step3_rate", 
-        round(col("step3_cart_users") * 100.0 / nullif(col("step2_click_users"), 0), 2))
+        round(col("step3_cart_users") * 100.0 / expr("nullif(step2_click_users, 0)"), 2))
       .withColumn("step3_to_step4_rate", 
-        round(col("step4_buy_users") * 100.0 / nullif(col("step3_cart_users"), 0), 2))
+        round(col("step4_buy_users") * 100.0 / expr("nullif(step3_cart_users, 0)"), 2))
       .withColumn("overall_conversion_rate", 
-        round(col("step4_buy_users") * 100.0 / nullif(col("step1_exposure_users"), 0), 2))
+        round(col("step4_buy_users") * 100.0 / expr("nullif(step1_exposure_users, 0)"), 2))
   }
 
   /**
@@ -181,11 +181,11 @@ object FunnelAnalysis extends Logging {
          |SELECT
          |  user_segment AS dimension,
          |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.VIEW}' THEN userId END) AS step1_exposure_users,
-         |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.VIEW}' THEN userId END) AS step2_click_users,
+         |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.FAVORITE}' THEN userId END) AS step2_click_users,
          |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.CART}' THEN userId END) AS step3_cart_users,
          |  COUNT(DISTINCT CASE WHEN behavior = '${Behaviors.BUY}' THEN userId END) AS step4_buy_users,
          |  COUNT(CASE WHEN behavior = '${Behaviors.VIEW}' THEN 1 END) AS step1_exposure_events,
-         |  COUNT(CASE WHEN behavior = '${Behaviors.VIEW}' THEN 1 END) AS step2_click_events,
+         |  COUNT(CASE WHEN behavior = '${Behaviors.FAVORITE}' THEN 1 END) AS step2_click_events,
          |  COUNT(CASE WHEN behavior = '${Behaviors.CART}' THEN 1 END) AS step3_cart_events,
          |  COUNT(CASE WHEN behavior = '${Behaviors.BUY}' THEN 1 END) AS step4_buy_events
          |FROM user_behavior_segmented
@@ -203,13 +203,13 @@ object FunnelAnalysis extends Logging {
     
     baseDF
       .withColumn("step1_to_step2_rate", 
-        round(col("step2_click_users") * 100.0 / nullif(col("step1_exposure_users"), 0), 2))
+        round(col("step2_click_users") * 100.0 / expr("nullif(step1_exposure_users, 0)"), 2))
       .withColumn("step2_to_step3_rate", 
-        round(col("step3_cart_users") * 100.0 / nullif(col("step2_click_users"), 0), 2))
+        round(col("step3_cart_users") * 100.0 / expr("nullif(step2_click_users, 0)"), 2))
       .withColumn("step3_to_step4_rate", 
-        round(col("step4_buy_users") * 100.0 / nullif(col("step3_cart_users"), 0), 2))
+        round(col("step4_buy_users") * 100.0 / expr("nullif(step3_cart_users, 0)"), 2))
       .withColumn("overall_conversion_rate", 
-        round(col("step4_buy_users") * 100.0 / nullif(col("step1_exposure_users"), 0), 2))
+        round(col("step4_buy_users") * 100.0 / expr("nullif(step1_exposure_users, 0)"), 2))
   }
 
   /**
@@ -223,11 +223,11 @@ object FunnelAnalysis extends Logging {
       .select(
         col("dimension"),
         col("step1_exposure_users").alias("曝光用户数"),
-        col("step2_click_users").alias("点击用户数"),
+        col("step2_click_users").alias("收藏用户数"),
         col("step3_cart_users").alias("加购用户数"),
         col("step4_buy_users").alias("支付用户数"),
-        col("step1_to_step2_rate").alias("曝光到点击转化率(%)"),
-        col("step2_to_step3_rate").alias("点击到加购转化率(%)"),
+        col("step1_to_step2_rate").alias("浏览到收藏转化率(%)"),
+        col("step2_to_step3_rate").alias("收藏到加购转化率(%)"),
         col("step3_to_step4_rate").alias("加购到支付转化率(%)"),
         col("overall_conversion_rate").alias("整体转化率(%)")
       )
@@ -246,7 +246,7 @@ object FunnelAnalysis extends Logging {
     val lossSQL =
       s"""
          |SELECT
-         |  'Step1->Step2: 曝光未点击' AS loss_stage,
+         |  'Step1->Step2: 浏览未收藏' AS loss_stage,
          |  COUNT(DISTINCT u1.userId) AS loss_users,
          |  ROUND(COUNT(DISTINCT u1.userId) * 100.0 / 
          |    NULLIF((SELECT COUNT(DISTINCT userId) FROM user_behavior WHERE behavior = '${Behaviors.VIEW}'), 0), 2) AS loss_rate
@@ -254,19 +254,19 @@ object FunnelAnalysis extends Logging {
          |  SELECT DISTINCT userId FROM user_behavior WHERE behavior = '${Behaviors.VIEW}'
          |) u1
          |LEFT JOIN (
-         |  SELECT DISTINCT userId FROM user_behavior WHERE behavior = '${Behaviors.VIEW}'
+         |  SELECT DISTINCT userId FROM user_behavior WHERE behavior = '${Behaviors.FAVORITE}'
          |) u2 ON u1.userId = u2.userId
          |WHERE u2.userId IS NULL
          |
          |UNION ALL
          |
          |SELECT
-         |  'Step2->Step3: 点击未加购' AS loss_stage,
+         |  'Step2->Step3: 收藏未加购' AS loss_stage,
          |  COUNT(DISTINCT u1.userId) AS loss_users,
          |  ROUND(COUNT(DISTINCT u1.userId) * 100.0 / 
-         |    NULLIF((SELECT COUNT(DISTINCT userId) FROM user_behavior WHERE behavior = '${Behaviors.VIEW}'), 0), 2) AS loss_rate
+         |    NULLIF((SELECT COUNT(DISTINCT userId) FROM user_behavior WHERE behavior = '${Behaviors.FAVORITE}'), 0), 2) AS loss_rate
          |FROM (
-         |  SELECT DISTINCT userId FROM user_behavior WHERE behavior = '${Behaviors.VIEW}'
+         |  SELECT DISTINCT userId FROM user_behavior WHERE behavior = '${Behaviors.FAVORITE}'
          |) u1
          |LEFT JOIN (
          |  SELECT DISTINCT userId FROM user_behavior WHERE behavior = '${Behaviors.CART}'

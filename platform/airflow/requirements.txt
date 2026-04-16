@@ -1,0 +1,10 @@
+apache-airflow-providers-cncf-kubernetes
+apache-airflow-providers-ssh
+apache-airflow-providers-apache-spark
+apache-airflow-providers-clickhouse
+clickhouse-driver
+pyspark==3.4.1
+great-expectations
+dbt-core
+dbt-clickhouse
+requests

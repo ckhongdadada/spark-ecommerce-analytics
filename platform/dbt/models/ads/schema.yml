@@ -1,0 +1,52 @@
+version: 2
+
+models:
+  - name: dws_user_daily
+    description: "DWS层用户日汇总表"
+    columns:
+      - name: user_id
+        tests:
+          - not_null
+      - name: behavior_date
+        tests:
+          - not_null
+      - name: conversion_rate
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+
+  - name: dws_category_daily
+    description: "DWS层类目日汇总表"
+    columns:
+      - name: category
+        tests:
+          - not_null
+      - name: behavior_date
+        tests:
+          - not_null
+
+  - name: ads_user_metrics
+    description: "ADS层用户指标表"
+    columns:
+      - name: user_id
+        tests:
+          - not_null
+          - unique
+      - name: user_value_score
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+
+  - name: ads_category_metrics
+    description: "ADS层类目指标表"
+    columns:
+      - name: category
+        tests:
+          - not_null
+          - unique
+      - name: market_share
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100

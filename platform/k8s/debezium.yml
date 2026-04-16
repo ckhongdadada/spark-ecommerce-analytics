@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: debezium
+  namespace: ecommerce-data-platform
+  labels:
+    app: debezium
+    tier: cdc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: debezium
+  template:
+    metadata:
+      labels:
+        app: debezium
+        tier: cdc
+    spec:
+      containers:
+        - name: debezium
+          image: debezium/connect:2.4
+          ports:
+            - containerPort: 8083
+          env:
+            - name: BOOTSTRAP_SERVERS
+              value: "kafka:29092"
+            - name: GROUP_ID
+              value: "debezium-cluster"
+            - name: CONFIG_STORAGE_TOPIC
+              value: "debezium_configs"
+            - name: OFFSET_STORAGE_TOPIC
+              value: "debezium_offsets"
+            - name: STATUS_STORAGE_TOPIC
+              value: "debezium_statuses"
+            - name: KEY_CONVERTER
+              value: "org.apache.kafka.connect.json.JsonConverter"
+            - name: VALUE_CONVERTER
+              value: "org.apache.kafka.connect.json.JsonConverter"
+            - name: KEY_CONVERTER_SCHEMAS_ENABLE
+              value: "false"
+            - name: VALUE_CONVERTER_SCHEMAS_ENABLE
+              value: "false"
+            - name: CONNECT_REST_ADVERTISED_HOST_NAME
+              value: "debezium"
+            - name: CONNECT_PLUGIN_PATH
+              value: "/kafka/connect,/debezium-connector"
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8083
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /connectors
+              port: 8083
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: debezium
+  namespace: ecommerce-data-platform
+spec:
+  selector:
+    app: debezium
+  ports:
+    - port: 8083
+      targetPort: 8083
+  type: ClusterIP

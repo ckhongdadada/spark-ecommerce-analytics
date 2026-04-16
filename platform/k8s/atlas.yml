@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas
+  namespace: ecommerce-data-platform
+  labels:
+    app: atlas
+    tier: governance
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: atlas
+  template:
+    metadata:
+      labels:
+        app: atlas
+        tier: governance
+    spec:
+      containers:
+        - name: atlas
+          image: apache/atlas:2.3.0
+          ports:
+            - containerPort: 21000
+          env:
+            - name: ATLAS_SERVER_HEAP_OPTS
+              value: "-Xms1g -Xmx1g"
+          volumeMounts:
+            - name: atlas-data
+              mountPath: /var/lib/atlas
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /api/atlas/v2/status
+              port: 21000
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /api/atlas/v2/status
+              port: 21000
+            initialDelaySeconds: 90
+            periodSeconds: 15
+      volumes:
+        - name: atlas-data
+          persistentVolumeClaim:
+            claimName: atlas-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas
+  namespace: ecommerce-data-platform
+spec:
+  selector:
+    app: atlas
+  ports:
+    - port: 21000
+      targetPort: 21000
+  type: ClusterIP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: atlas-data-pvc
+  namespace: ecommerce-data-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi

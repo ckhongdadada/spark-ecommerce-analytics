@@ -1,0 +1,144 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-jobmanager
+  namespace: ecommerce-data-platform
+  labels:
+    app: flink-jobmanager
+    tier: compute
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flink-jobmanager
+  template:
+    metadata:
+      labels:
+        app: flink-jobmanager
+        tier: compute
+    spec:
+      containers:
+        - name: flink-jobmanager
+          image: flink:1.18.0-scala_2.12-java11
+          command: ["jobmanager"]
+          ports:
+            - containerPort: 8081
+              name: web-ui
+            - containerPort: 6123
+              name: rpc
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secrets
+                  key: minio-root-user
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secrets
+                  key: minio-root-password
+            - name: FLINK_PROPERTIES
+              value: |
+                jobmanager.rpc.address: flink-jobmanager
+                jobmanager.memory.process.size: 1600m
+                rest.flamegraph.enabled: true
+                web.submit.enable: true
+                state.backend: rocksdb
+                state.checkpoints.dir: s3://flink/checkpoints
+                state.savepoints.dir: s3://flink/savepoints
+                s3.endpoint: http://minio:9000
+                s3.access-key: admin
+                s3.secret-key: admin123456
+                s3.path.style.access: true
+          volumeMounts:
+            - name: flink-jobs
+              mountPath: /opt/flink/usrlib
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /overview
+              port: 8081
+            initialDelaySeconds: 60
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /overview
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: flink-jobs
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-taskmanager
+  namespace: ecommerce-data-platform
+  labels:
+    app: flink-taskmanager
+    tier: compute
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flink-taskmanager
+  template:
+    metadata:
+      labels:
+        app: flink-taskmanager
+        tier: compute
+    spec:
+      containers:
+        - name: flink-taskmanager
+          image: flink:1.18.0-scala_2.12-java11
+          command: ["taskmanager"]
+          env:
+            - name: FLINK_PROPERTIES
+              value: |
+                jobmanager.rpc.address: flink-jobmanager
+                taskmanager.memory.process.size: 2048m
+                taskmanager.numberOfTaskSlots: 4
+                state.backend: rocksdb
+                state.checkpoints.dir: s3://flink/checkpoints
+                state.savepoints.dir: s3://flink/savepoints
+                s3.endpoint: http://minio:9000
+                s3.access-key: admin
+                s3.secret-key: admin123456
+                s3.path.style.access: true
+          volumeMounts:
+            - name: flink-jobs
+              mountPath: /opt/flink/usrlib
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2.5Gi"
+              cpu: "2000m"
+      volumes:
+        - name: flink-jobs
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flink-jobmanager
+  namespace: ecommerce-data-platform
+spec:
+  selector:
+    app: flink-jobmanager
+  ports:
+    - name: web-ui
+      port: 8081
+      targetPort: 8081
+    - name: rpc
+      port: 6123
+      targetPort: 6123
+  type: ClusterIP

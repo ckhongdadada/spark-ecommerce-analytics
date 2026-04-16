@@ -86,8 +86,8 @@
         <!-- Delta Lake -->
         <dependency>
             <groupId>io.delta</groupId>
-            <artifactId>delta-spark_${scala.binary.version}</artifactId>
-            <version>3.0.0</version>
+            <artifactId>delta-core_${scala.binary.version}</artifactId>
+            <version>2.3.0</version>
         </dependency>
 
         <!-- Logging API -->

@@ -1,0 +1,37 @@
+name: 'ecommerce_data_platform'
+version: '1.0.0'
+config-version: 2
+
+profile: 'ecommerce'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  ecommerce_data_platform:
+    ods:
+      +materialized: view
+      +schema: ods
+    dwd:
+      +materialized: incremental
+      +schema: dwd
+      +unique_key: ['user_id', 'behavior_date']
+    dws:
+      +materialized: incremental
+      +schema: dws
+      +unique_key: ['category', 'behavior_date']
+    ads:
+      +materialized: table
+      +schema: ads
+
+vars:
+  etl_date: "{{ env_var('ETL_DATE', run_started_at.strftime('%Y-%m-%d')) }}"

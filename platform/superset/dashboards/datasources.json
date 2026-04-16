@@ -1,0 +1,43 @@
+{
+    "databases": [
+        {
+            "database_name": "Ecommerce ClickHouse",
+            "sqlalchemy_uri": "clickhouse+native://default:clickhouse123@clickhouse:9000/ecommerce",
+            "expose_in_sqllab": true,
+            "allow_ctas": false,
+            "allow_cvas": false,
+            "configuration_method": "sqlalchemy_form"
+        },
+        {
+            "database_name": "Ecommerce MySQL",
+            "sqlalchemy_uri": "mysql+pymysql://root:123456@mysql:3306/ecommerce",
+            "expose_in_sqllab": true,
+            "allow_ctas": false,
+            "allow_cvas": false,
+            "configuration_method": "sqlalchemy_form"
+        }
+    ],
+    "dashboards": [
+        {
+            "dashboard_title": "电商数据总览",
+            "description": "电商全路径数据分析总览仪表盘",
+            "slug": "ecommerce-overview",
+            "position_json": {},
+            "metadata": {
+                "native_filter_configuration": [
+                    {
+                        "id": "category-filter",
+                        "name": "类目",
+                        "filterType": "select",
+                        "targets": [{"dataset": "ads_category_metrics", "column": "category"}]
+                    },
+                    {
+                        "id": "date-filter",
+                        "name": "日期",
+                        "filterType": "date"
+                    }
+                ]
+            }
+        }
+    ]
+}

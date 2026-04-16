@@ -1,5 +1,7 @@
 *.zip
 *.docx
+.env
+**/.env
 target/
 .classpath
 .project

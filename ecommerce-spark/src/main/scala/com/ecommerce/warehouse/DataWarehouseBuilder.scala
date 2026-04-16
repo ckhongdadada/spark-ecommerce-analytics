@@ -148,7 +148,7 @@ object DataWarehouseBuilder extends Logging {
         .when(col("total_behaviors") >= 10, "低活跃")
         .otherwise("新用户"))
       .withColumn("conversion_rate", 
-        round(col("buy_count") * 100.0 / nullif(col("view_count"), 0), 2))
+        round(col("buy_count") * 100.0 / expr("nullif(view_count, 0)"), 2))
       .select(
         col("userId").alias("user_id"),
         col("first_behavior_time"),
@@ -188,7 +188,7 @@ object DataWarehouseBuilder extends Logging {
         .when(col("unique_users") >= 10, "普通")
         .otherwise("冷门"))
       .withColumn("conversion_rate", 
-        round(col("buy_count") * 100.0 / nullif(col("view_count"), 0), 2))
+        round(col("buy_count") * 100.0 / expr("nullif(view_count, 0)"), 2))
       .select(
         col("itemId").alias("item_id"),
         col("category"),
@@ -228,7 +228,7 @@ object DataWarehouseBuilder extends Logging {
       )
       .withColumn("active_hours", col("last_active_hour") - col("first_active_hour") + 1)
       .withColumn("conversion_rate", 
-        round(col("buy_count") * 100.0 / nullif(col("view_count"), 0), 2))
+        round(col("buy_count") * 100.0 / expr("nullif(view_count, 0)"), 2))
   }
 
   /**
@@ -250,7 +250,7 @@ object DataWarehouseBuilder extends Logging {
         sum(when(col("behavior") === Behaviors.FAVORITE, 1).otherwise(0)).alias("fav_count")
       )
       .withColumn("conversion_rate", 
-        round(col("buy_count") * 100.0 / nullif(col("view_count"), 0), 2))
+        round(col("buy_count") * 100.0 / expr("nullif(view_count, 0)"), 2))
   }
 
   /**
@@ -273,9 +273,9 @@ object DataWarehouseBuilder extends Logging {
         sum(when(col("behavior") === Behaviors.FAVORITE, 1).otherwise(0)).alias("fav_count")
       )
       .withColumn("conversion_rate", 
-        round(col("buy_count") * 100.0 / nullif(col("view_count"), 0), 2))
+        round(col("buy_count") * 100.0 / expr("nullif(view_count, 0)"), 2))
       .withColumn("avg_interactions_per_user", 
-        round(col("total_interactions") / nullif(col("unique_users"), 0), 2))
+        round(col("total_interactions") / expr("nullif(unique_users, 0)"), 2))
   }
 
   // ==================== ADS 层 ====================
@@ -301,8 +301,10 @@ object DataWarehouseBuilder extends Logging {
     
     dwdUserProfile
       .join(userDailySummary, Seq("user_id"), "left")
+      .na.fill(0, Seq("active_days", "total_behaviors", "total_views", "total_carts", "total_buys"))
+      .na.fill(0.0, Seq("avg_conversion_rate"))
       .withColumn("avg_behaviors_per_day", 
-        round(col("total_behaviors") / nullif(col("active_days"), 0), 2))
+        round(col("total_behaviors") / expr("nullif(active_days, 0)"), 2))
       .withColumn("user_value_score", 
         round((col("total_buys") * 10 + col("total_carts") * 5 + col("total_views")) / 100.0, 2))
       .select(
@@ -341,8 +343,10 @@ object DataWarehouseBuilder extends Logging {
     
     dwdItemProfile
       .join(itemDailySummary, Seq("item_id", "category"), "left")
+      .na.fill(0, Seq("active_days", "total_interactions", "total_users", "total_views", "total_carts", "total_buys"))
+      .na.fill(0.0, Seq("avg_conversion_rate"))
       .withColumn("avg_interactions_per_day", 
-        round(col("total_interactions") / nullif(col("active_days"), 0), 2))
+        round(col("total_interactions") / expr("nullif(active_days, 0)"), 2))
       .withColumn("item_heat_score", 
         round((col("total_buys") * 10 + col("total_carts") * 5 + col("total_views")) / 100.0, 2))
       .select(

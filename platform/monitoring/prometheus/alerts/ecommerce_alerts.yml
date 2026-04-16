@@ -1,0 +1,65 @@
+groups:
+  - name: ecommerce_alerts
+    rules:
+      - alert: ClickHouseDown
+        expr: up{job="clickhouse"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ClickHouse is down"
+          description: "ClickHouse instance has been down for more than 2 minutes"
+
+      - alert: KafkaDown
+        expr: up{job="kafka"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kafka is down"
+          description: "Kafka instance has been down for more than 2 minutes"
+
+      - alert: FlinkJobManagerDown
+        expr: up{job="flink-jobmanager"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Flink JobManager is down"
+          description: "Flink JobManager has been down for more than 2 minutes"
+
+      - alert: FastAPIDown
+        expr: up{job="fastapi"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "FastAPI service is down"
+          description: "FastAPI service has been down for more than 5 minutes"
+
+      - alert: HighKafkaConsumerLag
+        expr: kafka_consumer_lag_records > 100000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High Kafka consumer lag"
+          description: "Kafka consumer lag exceeds 100K records for 10 minutes"
+
+      - alert: ClickHouseQuerySlow
+        expr: clickhouse_query_duration_seconds_p99 > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow ClickHouse queries"
+          description: "ClickHouse P99 query duration exceeds 30 seconds"
+
+      - alert: MinIODiskSpaceLow
+        expr: minio_cluster_disk_free_bytes / minio_cluster_disk_total_bytes < 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MinIO disk space low"
+          description: "MinIO disk usage exceeds 90%"

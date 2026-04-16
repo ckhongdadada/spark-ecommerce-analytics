@@ -1,0 +1,23 @@
+version: 2
+
+sources:
+  - name: ecommerce
+    database: ecommerce
+    schema: ecommerce
+    tables:
+      - name: ods_user_behavior
+        description: "ODS层用户行为原始数据"
+        columns:
+          - name: user_id
+            tests:
+              - not_null
+          - name: item_id
+            tests:
+              - not_null
+          - name: behavior
+            tests:
+              - accepted_values:
+                  values: ['pv', 'buy', 'cart', 'fav']
+          - name: category
+            tests:
+              - not_null

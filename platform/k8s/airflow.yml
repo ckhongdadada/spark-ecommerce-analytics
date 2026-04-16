@@ -1,0 +1,174 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-webserver
+  namespace: ecommerce-data-platform
+  labels:
+    app: airflow-webserver
+    tier: scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow-webserver
+  template:
+    metadata:
+      labels:
+        app: airflow-webserver
+        tier: scheduler
+    spec:
+      containers:
+        - name: airflow-webserver
+          image: apache/airflow:2.8.0
+          command: ["airflow", "webserver"]
+          ports:
+            - containerPort: 8080
+          env:
+            - name: AIRFLOW__CORE__EXECUTOR
+              value: "LocalExecutor"
+            - name: AIRFLOW__CORE__SQL_ALCHEMY_CONN
+              value: "postgresql+psycopg2://admin:admin123@postgres:5432/airflow"
+            - name: AIRFLOW__CORE__FERNET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secrets
+                  key: airflow-fernet-key
+            - name: AIRFLOW__CORE__LOAD_EXAMPLES
+              value: "false"
+            - name: AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION
+              value: "true"
+            - name: AIRFLOW__WEBSERVER__EXPOSE_CONFIG
+              value: "true"
+            - name: AIRFLOW__WEBSERVER__RBAC
+              value: "true"
+          volumeMounts:
+            - name: airflow-dags
+              mountPath: /opt/airflow/dags
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: airflow-dags
+          configMap:
+            name: airflow-dags
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-scheduler
+  namespace: ecommerce-data-platform
+  labels:
+    app: airflow-scheduler
+    tier: scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow-scheduler
+  template:
+    metadata:
+      labels:
+        app: airflow-scheduler
+        tier: scheduler
+    spec:
+      containers:
+        - name: airflow-scheduler
+          image: apache/airflow:2.8.0
+          command: ["airflow", "scheduler"]
+          env:
+            - name: AIRFLOW__CORE__EXECUTOR
+              value: "LocalExecutor"
+            - name: AIRFLOW__CORE__SQL_ALCHEMY_CONN
+              value: "postgresql+psycopg2://admin:admin123@postgres:5432/airflow"
+            - name: AIRFLOW__CORE__FERNET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secrets
+                  key: airflow-fernet-key
+            - name: AIRFLOW__CORE__LOAD_EXAMPLES
+              value: "false"
+            - name: AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION
+              value: "true"
+          volumeMounts:
+            - name: airflow-dags
+              mountPath: /opt/airflow/dags
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+      volumes:
+        - name: airflow-dags
+          configMap:
+            name: airflow-dags
+---
+# Airflow Init Job — 初始化数据库和管理员用户
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: airflow-init
+  namespace: ecommerce-data-platform
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: airflow-init
+          image: apache/airflow:2.8.0
+          env:
+            - name: AIRFLOW__CORE__EXECUTOR
+              value: "LocalExecutor"
+            - name: AIRFLOW__CORE__SQL_ALCHEMY_CONN
+              value: "postgresql+psycopg2://admin:admin123@postgres:5432/airflow"
+            - name: AIRFLOW__CORE__FERNET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secrets
+                  key: airflow-fernet-key
+            - name: AIRFLOW__CORE__LOAD_EXAMPLES
+              value: "false"
+          command:
+            - /bin/bash
+            - -c
+            - |
+              airflow db migrate && \
+              airflow users create \
+                --username admin \
+                --password admin123 \
+                --firstname Admin \
+                --lastname User \
+                --role Admin \
+                --email admin@example.org || true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: airflow-webserver
+  namespace: ecommerce-data-platform
+spec:
+  selector:
+    app: airflow-webserver
+  ports:
+    - port: 8080
+      targetPort: 8080
+  type: ClusterIP

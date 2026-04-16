@@ -1,0 +1,522 @@
+version: "3.9"
+
+x-common-env: &common-env
+  COMPOSE_PROJECT_NAME: ecommerce-data-platform
+
+services:
+  # ==================== 存储层 ====================
+  mysql:
+    image: mysql:8.0
+    container_name: dpl-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
+      MYSQL_DATABASE: ecommerce
+      MYSQL_USER: ecommerce
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-ecommerce123}
+      MYSQL_ROOT_HOST: "%"
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./infra/mysql/init:/docker-entrypoint-initdb.d
+      - ./infra/mysql/conf:/etc/mysql/conf.d
+    command: >
+      --server-id=1
+      --log-bin=mysql-bin
+      --binlog-format=ROW
+      --binlog-row-image=FULL
+      --gtid-mode=ON
+      --enforce-gtid-consistency=ON
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - data-platform
+
+  postgres:
+    image: postgres:15
+    container_name: dpl-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: metadata
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-admin123}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d metadata"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - data-platform
+
+  minio:
+    image: minio/minio:latest
+    container_name: dpl-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-admin123456}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - data-platform
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: dpl-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER:-admin} ${MINIO_ROOT_PASSWORD:-admin123456};
+      mc mb myminio/warehouse --ignore-existing;
+      mc mb myminio/ecommerce --ignore-existing;
+      mc mb myminio/iceberg --ignore-existing;
+      mc mb myminio/flink --ignore-existing;
+      mc mb myminio/spark --ignore-existing;
+      echo 'MinIO buckets initialized';
+      "
+    networks:
+      - data-platform
+
+  # ==================== 消息队列 ====================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: dpl-zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
+    networks:
+      - data-platform
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: dpl-kafka
+    restart: unless-stopped
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    networks:
+      - data-platform
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: dpl-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic ecommerce.user_behavior --partitions 3 --replication-factor 1;
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic ecommerce.user_profile --partitions 3 --replication-factor 1;
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic ecommerce.order_events --partitions 3 --replication-factor 1;
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic debezium.ecommerce.user_behavior_log --partitions 3 --replication-factor 1;
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic flink.realtime_metrics --partitions 3 --replication-factor 1;
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic flink.alert_events --partitions 1 --replication-factor 1;
+      echo 'Kafka topics initialized';
+      "
+    networks:
+      - data-platform
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: dpl-kafka-ui
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: ecommerce-cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    networks:
+      - data-platform
+
+  # ==================== CDC 数据采集 ====================
+  debezium:
+    image: debezium/connect:2.4
+    container_name: dpl-debezium
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:29092
+      GROUP_ID: debezium-cluster
+      CONFIG_STORAGE_TOPIC: debezium_configs
+      OFFSET_STORAGE_TOPIC: debezium_offsets
+      STATUS_STORAGE_TOPIC: debezium_statuses
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_REST_ADVERTISED_HOST_NAME: debezium
+      CONNECT_PLUGIN_PATH: /kafka/connect,/debezium-connector
+    volumes:
+      - debezium_data:/kafka/connect
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    networks:
+      - data-platform
+
+  # ==================== 实时计算 ====================
+  flink-jobmanager:
+    image: flink:1.18.0-scala_2.12-java11
+    container_name: dpl-flink-jobmanager
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    command: jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        jobmanager.memory.process.size: 1600m
+        rest.flamegraph.enabled: true
+        web.submit.enable: true
+        state.backend: rocksdb
+        state.checkpoints.dir: s3://flink/checkpoints
+        state.savepoints.dir: s3://flink/savepoints
+        s3.endpoint: http://minio:9000
+        s3.access-key: ${MINIO_ROOT_USER:-admin}
+        s3.secret-key: ${MINIO_ROOT_PASSWORD:-admin123456}
+        s3.path.style.access: true
+    volumes:
+      - ./flink/jobs:/opt/flink/usrlib
+      - ./flink/conf:/opt/flink/conf
+    depends_on:
+      - minio
+    networks:
+      - data-platform
+
+  flink-taskmanager:
+    image: flink:1.18.0-scala_2.12-java11
+    container_name: dpl-flink-taskmanager
+    restart: unless-stopped
+    command: taskmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.memory.process.size: 2048m
+        taskmanager.numberOfTaskSlots: 4
+        state.backend: rocksdb
+        state.checkpoints.dir: s3://flink/checkpoints
+        state.savepoints.dir: s3://flink/savepoints
+        s3.endpoint: http://minio:9000
+        s3.access-key: ${MINIO_ROOT_USER:-admin}
+        s3.secret-key: ${MINIO_ROOT_PASSWORD:-admin123456}
+        s3.path.style.access: true
+    volumes:
+      - ./flink/jobs:/opt/flink/usrlib
+      - ./flink/conf:/opt/flink/conf
+    depends_on:
+      - flink-jobmanager
+    networks:
+      - data-platform
+
+  # ==================== OLAP 查询引擎 ====================
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8
+    container_name: dpl-clickhouse
+    restart: unless-stopped
+    ports:
+      - "8123:8123"
+      - "9300:9000"
+    environment:
+      CLICKHOUSE_DB: ecommerce
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse123}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./infra/clickhouse/init:/docker-entrypoint-initdb.d
+      - ./infra/clickhouse/config:/etc/clickhouse-server/config.d
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--password", "${CLICKHOUSE_PASSWORD:-clickhouse123}", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - data-platform
+
+  # ==================== 调度 ====================
+  airflow-webserver:
+    image: apache/airflow:2.8.0
+    container_name: dpl-airflow-webserver
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8085:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://admin:${POSTGRES_PASSWORD:-admin123}@postgres:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+      AIRFLOW__WEBSERVER__RBAC: "true"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/requirements.txt:/opt/airflow/requirements.txt
+      - ./scripts:/opt/airflow/scripts
+    command: webserver
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type WebServer"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - data-platform
+
+  airflow-scheduler:
+    image: apache/airflow:2.8.0
+    container_name: dpl-airflow-scheduler
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://admin:${POSTGRES_PASSWORD:-admin123}@postgres:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/requirements.txt:/opt/airflow/requirements.txt
+      - ./scripts:/opt/airflow/scripts
+    command: scheduler
+    networks:
+      - data-platform
+
+  airflow-init:
+    image: apache/airflow:2.8.0
+    container_name: dpl-airflow-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://admin:${POSTGRES_PASSWORD:-admin123}@postgres:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin123}
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+    entrypoint: /bin/bash
+    command: -c "airflow db migrate && airflow users create --username admin --password admin123 --firstname Admin --lastname User --role Admin --email admin@example.org || true"
+    networks:
+      - data-platform
+
+  # ==================== 可视化 ====================
+  superset:
+    image: apache/superset:3.0.0
+    container_name: dpl-superset
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "8088:8088"
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:-superset-secret-key-change-me}
+      DATABASE_URI: postgresql+psycopg2://admin:${POSTGRES_PASSWORD:-admin123}@postgres:5432/superset
+    volumes:
+      - superset_data:/app/pythonpath
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py
+      - ./superset/dashboards:/app/pythonpath/dashboards
+    networks:
+      - data-platform
+
+  superset-init:
+    image: apache/superset:3.0.0
+    container_name: dpl-superset-init
+    depends_on:
+      - postgres
+      - clickhouse
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:-superset-secret-key-change-me}
+      DATABASE_URI: postgresql+psycopg2://admin:${POSTGRES_PASSWORD:-admin123}@postgres:5432/superset
+    volumes:
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py
+    entrypoint: >
+      /bin/bash -c "
+      superset db upgrade &&
+      superset fab create-admin --username admin --firstname Admin --lastname User --email admin@example.org --password admin123 || true &&
+      superset init &&
+      echo 'Superset initialized'
+      "
+    networks:
+      - data-platform
+
+  # ==================== 数据治理 ====================
+  atlas:
+    image: apache/atlas:2.3.0
+    container_name: dpl-atlas
+    restart: unless-stopped
+    ports:
+      - "21000:21000"
+    environment:
+      ATLAS_SERVER_HEAP_OPTS: "-Xms1g -Xmx1g"
+    volumes:
+      - atlas_data:/var/lib/atlas
+      - ./infra/atlas/conf:/opt/atlas/conf
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:21000/api/atlas/v2/status"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 120s
+    networks:
+      - data-platform
+
+  # ==================== 监控 ====================
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: dpl-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/prometheus/alerts:/etc/prometheus/alerts
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    networks:
+      - data-platform
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: dpl-grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin123}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - data-platform
+
+  # ==================== 服务层 ====================
+  fastapi:
+    build:
+      context: ./service
+      dockerfile: Dockerfile
+    container_name: dpl-fastapi
+    restart: unless-stopped
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 9000
+      CLICKHOUSE_DB: ecommerce
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse123}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DB: ecommerce
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
+    volumes:
+      - ./service:/app
+    networks:
+      - data-platform
+
+volumes:
+  mysql_data:
+  postgres_data:
+  minio_data:
+  zookeeper_data:
+  zookeeper_logs:
+  kafka_data:
+  debezium_data:
+  clickhouse_data:
+  superset_data:
+  atlas_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  data-platform:
+    driver: bridge

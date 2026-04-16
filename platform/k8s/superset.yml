@@ -1,0 +1,139 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: superset
+  namespace: ecommerce-data-platform
+  labels:
+    app: superset
+    tier: visualization
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: superset
+  template:
+    metadata:
+      labels:
+        app: superset
+        tier: visualization
+    spec:
+      containers:
+        - name: superset
+          image: apache/superset:3.0.0
+          ports:
+            - containerPort: 8088
+          env:
+            - name: SUPERSET_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secrets
+                  key: superset-secret-key
+            - name: DATABASE_URI
+              value: "postgresql+psycopg2://admin:admin123@postgres:5432/superset"
+          volumeMounts:
+            - name: superset-config
+              mountPath: /app/pythonpath/superset_config.py
+              subPath: superset_config.py
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8088
+            initialDelaySeconds: 90
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8088
+            initialDelaySeconds: 60
+            periodSeconds: 15
+      volumes:
+        - name: superset-config
+          configMap:
+            name: superset-config
+---
+# Superset Init Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: superset-init
+  namespace: ecommerce-data-platform
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: superset-init
+          image: apache/superset:3.0.0
+          env:
+            - name: SUPERSET_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secrets
+                  key: superset-secret-key
+            - name: DATABASE_URI
+              value: "postgresql+psycopg2://admin:admin123@postgres:5432/superset"
+          volumeMounts:
+            - name: superset-config
+              mountPath: /app/pythonpath/superset_config.py
+              subPath: superset_config.py
+          command:
+            - /bin/bash
+            - -c
+            - |
+              superset db upgrade && \
+              superset fab create-admin \
+                --username admin \
+                --firstname Admin \
+                --lastname User \
+                --email admin@example.org \
+                --password admin123 || true && \
+              superset init && \
+              echo "Superset initialized"
+      volumes:
+        - name: superset-config
+          configMap:
+            name: superset-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: superset
+  namespace: ecommerce-data-platform
+spec:
+  selector:
+    app: superset
+  ports:
+    - port: 8088
+      targetPort: 8088
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: superset-config
+  namespace: ecommerce-data-platform
+data:
+  superset_config.py: |
+    import os
+    SECRET_KEY = os.getenv("SUPERSET_SECRET_KEY", "superset-secret-key-change-me")
+    SQLALCHEMY_DATABASE_URI = os.getenv(
+        "DATABASE_URI",
+        "postgresql+psycopg2://admin:admin123@postgres:5432/superset"
+    )
+    FEATURE_FLAGS = {
+        "ENABLE_TEMPLATE_PROCESSING": True,
+        "DASHBOARD_NATIVE_FILTERS": True,
+        "ALERT_REPORTS": True,
+    }
+    CACHE_CONFIG = {"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 300}
+    DATA_CACHE_CONFIG = {"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 300}
+    CLICKHOUSE_URI = "clickhouse+native://default:clickhouse123@clickhouse:9000/ecommerce"
+    MYSQL_URI = "mysql+pymysql://root:123456@mysql:3306/ecommerce"

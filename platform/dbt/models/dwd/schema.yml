@@ -1,0 +1,43 @@
+version: 2
+
+models:
+  - name: dwd_user_behavior_detail
+    description: "DWD层用户行为明细表"
+    columns:
+      - name: user_id
+        tests:
+          - not_null
+      - name: item_id
+        tests:
+          - not_null
+      - name: behavior
+        tests:
+          - accepted_values:
+              values: ['pv', 'buy', 'cart', 'fav']
+      - name: session_id
+        tests:
+          - not_null
+
+  - name: dwd_user_profile
+    description: "DWD层用户画像表"
+    columns:
+      - name: user_id
+        tests:
+          - not_null
+          - unique
+      - name: user_level
+        tests:
+          - accepted_values:
+              values: ['high_active', 'medium_active', 'low_active', 'new_user']
+
+  - name: dwd_item_profile
+    description: "DWD层商品画像表"
+    columns:
+      - name: item_id
+        tests:
+          - not_null
+          - unique
+      - name: item_popularity
+        tests:
+          - accepted_values:
+              values: ['hot', 'warm', 'normal', 'cold']

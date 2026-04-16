@@ -2,7 +2,9 @@ package com.ecommerce.analytics
 
 import com.ecommerce.util.Logging
 import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.functions._
 import java.io.{File, PrintWriter}
+import java.nio.charset.StandardCharsets
 
 /**
  * 漏斗可视化工具
@@ -17,7 +19,7 @@ object FunnelVisualization extends Logging {
    */
   def generateASCIIFunnel(funnelDF: DataFrame, dimension: String = "Global"): String = {
     val data = funnelDF
-      .filter(s"dimension = '$dimension'")
+      .filter(col("dimension") === lit(dimension))
       .select(
         "step1_exposure_users",
         "step2_click_users",
@@ -59,7 +61,7 @@ object FunnelVisualization extends Logging {
     // Step 1: 曝光
     sb.append("┌").append("─" * step1Width).append("┐\n")
     sb.append("│").append(" " * ((step1Width - 20) / 2))
-      .append(f"Step 1: 曝光 ($step1%,d 用户)")
+      .append(f"Step 1: 浏览 ($step1%,d 用户)")
       .append(" " * ((step1Width - 20) / 2)).append("│\n")
     sb.append("└").append("─" * step1Width).append("┘\n")
     sb.append("  " * ((step1Width - 20) / 2)).append(s"↓ 转化率: $rate12%.2f%%\n\n")
@@ -68,7 +70,7 @@ object FunnelVisualization extends Logging {
     val padding2 = (step1Width - step2Width) / 2
     sb.append(" " * padding2).append("┌").append("─" * step2Width).append("┐\n")
     sb.append(" " * padding2).append("│").append(" " * ((step2Width - 20) / 2))
-      .append(f"Step 2: 点击 ($step2%,d 用户)")
+      .append(f"Step 2: 收藏 ($step2%,d 用户)")
       .append(" " * ((step2Width - 20) / 2)).append("│\n")
     sb.append(" " * padding2).append("└").append("─" * step2Width).append("┘\n")
     sb.append(" " * ((step1Width - 20) / 2)).append(s"↓ 转化率: $rate23%.2f%%\n\n")
@@ -103,7 +105,7 @@ object FunnelVisualization extends Logging {
    */
   def generateEChartsConfig(funnelDF: DataFrame, dimension: String = "Global"): String = {
     val data = funnelDF
-      .filter(s"dimension = '$dimension'")
+      .filter(col("dimension") === lit(dimension))
       .select(
         "step1_exposure_users",
         "step2_click_users",
@@ -156,8 +158,8 @@ object FunnelVisualization extends Logging {
        |        }
        |      },
        |      "data": [
-       |        { "value": $step1, "name": "曝光" },
-       |        { "value": $step2, "name": "点击" },
+       |        { "value": $step1, "name": "浏览" },
+       |        { "value": $step2, "name": "收藏" },
        |        { "value": $step3, "name": "加购" },
        |        { "value": $step4, "name": "支付" }
        |      ]
@@ -185,7 +187,7 @@ object FunnelVisualization extends Logging {
     // 保存全局漏斗 ASCII 图
     val globalASCII = generateASCIIFunnel(globalFunnel, "Global")
     val asciiFile = new File(s"$outputPath/funnel_ascii.txt")
-    val asciiWriter = new PrintWriter(asciiFile)
+    val asciiWriter = new PrintWriter(asciiFile, StandardCharsets.UTF_8.name())
     try {
       asciiWriter.write(globalASCII)
       logger.info(s"ASCII funnel saved to ${asciiFile.getAbsolutePath}")
@@ -196,7 +198,7 @@ object FunnelVisualization extends Logging {
     // 保存全局漏斗 ECharts 配置
     val globalECharts = generateEChartsConfig(globalFunnel, "Global")
     val echartsFile = new File(s"$outputPath/funnel_echarts_global.json")
-    val echartsWriter = new PrintWriter(echartsFile)
+    val echartsWriter = new PrintWriter(echartsFile, StandardCharsets.UTF_8.name())
     try {
       echartsWriter.write(globalECharts)
       logger.info(s"ECharts config saved to ${echartsFile.getAbsolutePath}")
@@ -208,8 +210,8 @@ object FunnelVisualization extends Logging {
     val categories = categoryFunnel.select("dimension").distinct().collect().map(_.getString(0))
     categories.foreach { category =>
       val categoryECharts = generateEChartsConfig(categoryFunnel, category)
-      val categoryFile = new File(s"$outputPath/funnel_echarts_$category.json")
-      val categoryWriter = new PrintWriter(categoryFile)
+      val categoryFile = new File(s"$outputPath/funnel_echarts_${sanitizeFileName(category)}.json")
+      val categoryWriter = new PrintWriter(categoryFile, StandardCharsets.UTF_8.name())
       try {
         categoryWriter.write(categoryECharts)
       } finally {
@@ -246,5 +248,9 @@ object FunnelVisualization extends Logging {
       .select("dimension", "overall_conversion_rate")
       .orderBy(col("overall_conversion_rate").desc)
       .show(truncate = false)
+  }
+
+  private def sanitizeFileName(value: String): String = {
+    value.replaceAll("[^\\p{L}\\p{N}_-]", "_")
   }
 }
