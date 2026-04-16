@@ -46,8 +46,6 @@ object SparkSessionFactory {
       .set("spark.sql.adaptive.coalescePartitions.enabled", "true")
       .set("spark.sql.adaptive.skewJoin.enabled", "true")
       .set("spark.eventLog.enabled", enableEventLog.toString)
-      .set("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-      .set("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
       .registerKryoClasses(Array(
         classOf[UserBehaviorLog],
         classOf[CleanBehavior],

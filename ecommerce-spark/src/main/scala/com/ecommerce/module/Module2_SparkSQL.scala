@@ -46,24 +46,20 @@ object Module2_SparkSQL extends Logging {
     logger.info(s"Top 3 items per category by '${Behaviors.BUY}' count:")
     top3DF.show(30, truncate = false)
 
-    // ---- File persistence (Parquet or Delta) ----
-    val format = AppConfig.DATA_FORMAT
-    logger.info(s"Writing reports in $format format")
+    // ---- File persistence (Parquet format) ----
+    logger.info("Writing reports in parquet format")
 
     funnelDF.write
       .mode(SaveMode.Overwrite)
-      .format(format)
-      .save(s"${AppConfig.SQL_OUTPUT_PATH}/funnel_report")
+      .parquet(s"${AppConfig.SQL_OUTPUT_PATH}/funnel_report")
 
     hourTrendDF.write
       .mode(SaveMode.Overwrite)
-      .format(format)
-      .save(s"${AppConfig.SQL_OUTPUT_PATH}/hour_trend")
+      .parquet(s"${AppConfig.SQL_OUTPUT_PATH}/hour_trend")
 
     top3DF.write
       .mode(SaveMode.Overwrite)
-      .format(format)
-      .save(s"${AppConfig.SQL_OUTPUT_PATH}/top3_items")
+      .parquet(s"${AppConfig.SQL_OUTPUT_PATH}/top3_items")
 
     // ---- Advanced Funnel Analysis ----
     logger.info("=" * 60)
@@ -98,7 +94,7 @@ object Module2_SparkSQL extends Logging {
       userSegmentFunnel,
       lossAnalysis,
       s"${AppConfig.SQL_OUTPUT_PATH}/funnel_analysis",
-      format
+      "parquet"
     )
 
     // 生成可视化配置

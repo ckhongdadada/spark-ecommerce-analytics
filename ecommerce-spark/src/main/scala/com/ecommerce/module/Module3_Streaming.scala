@@ -259,7 +259,7 @@ object Module3_Streaming extends Logging {
 
   private def writeFileSink(df: DataFrame, outputPath: String, checkpointPath: String, queryName: String): StreamingQuery = {
     df.writeStream
-      .format(AppConfig.DATA_FORMAT)
+      .format("parquet")
       .outputMode("append")
       .option("path", outputPath)
       .option("checkpointLocation", checkpointPath)
