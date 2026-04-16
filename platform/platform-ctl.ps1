@@ -105,6 +105,7 @@ function K8s-Start {
     kubectl apply -f k8s\superset.yml
     kubectl apply -f k8s\atlas.yml
     kubectl apply -f k8s\fastapi.yml
+    kubectl apply -f k8s\frontend.yml
     kubectl apply -f k8s\monitoring.yml
     
     Write-Host "K8s resources applied successfully." -ForegroundColor Green

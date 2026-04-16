@@ -147,6 +147,7 @@ function k8s_start() {
     kubectl apply -f k8s/superset.yml
     kubectl apply -f k8s/atlas.yml
     kubectl apply -f k8s/fastapi.yml
+    kubectl apply -f k8s/frontend.yml
     kubectl apply -f k8s/monitoring.yml
     echo -e "${GREEN}K8s resources applied successfully.${NC}"
 }

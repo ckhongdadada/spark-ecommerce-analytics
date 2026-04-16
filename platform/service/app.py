@@ -324,13 +324,13 @@ def get_funnel_analysis(category: Optional[str] = None):
         FROM dws_category_daily {category_filter}
         UNION ALL
         SELECT
-            'cart' AS step_name,
-            sum(cart_count) AS count
+            'fav' AS step_name,
+            sum(fav_count) AS count
         FROM dws_category_daily {category_filter}
         UNION ALL
         SELECT
-            'fav' AS step_name,
-            sum(fav_count) AS count
+            'cart' AS step_name,
+            sum(cart_count) AS count
         FROM dws_category_daily {category_filter}
         UNION ALL
         SELECT

@@ -503,6 +503,19 @@ services:
     networks:
       - data-platform
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: dpl-frontend
+    restart: unless-stopped
+    depends_on:
+      - fastapi
+    ports:
+      - "5173:80"
+    networks:
+      - data-platform
+
 volumes:
   mysql_data:
   postgres_data:

@@ -32,6 +32,7 @@ graph TD
     end
     
     subgraph Apps [应用与治理]
+        Frontend(Vue Dashboard)
         Airflow(Airflow 2.8)
         Superset(Superset 3.0)
         FastAPI(FastAPI)
@@ -129,8 +130,29 @@ graph TD
 | **Prometheus** | 时序数据库引擎 | `9090` | NA |
 | **Apache Atlas**| 数据血缘及治理 | `21000`| admin / admin |
 | **FastAPI** | 自研查询接口 | `8000` | NA |
+| **Vue Frontend** | 电商分析控制台 | `5173` | NA |
 
 > 注意：所有敏感密码均可在 `platform/.env` (针对 Compose) 或 `platform/k8s/secrets.yml` (针对 K8s) 中修改。
+
+## 前端控制台
+
+本项目新增了 `platform/frontend` Vue 前端，用于展示电商全路径分析结果。界面风格参考 `qt-vue+flask` 项目的左侧工作台布局、暖色纸张卡片和统计面板，但不包含右侧 AI 助手。
+
+本地开发：
+
+```bash
+cd platform/frontend
+npm install
+npm run dev
+```
+
+Docker Compose 启动平台后访问：
+
+```text
+http://localhost:5173
+```
+
+前端默认读取 `/api/v1/*` 与 `/health`，开发模式由 Vite 代理到 `http://localhost:8000`，Docker 模式由 Nginx 转发到 `fastapi:8000`。如果后端服务暂时不可用，页面会自动显示内置演示数据，方便课堂展示和答辩。
 
 ## 故障排查建议 (Troubleshooting)
 
