@@ -209,7 +209,8 @@ object AppConfig {
     ModuleDefinition("3", "Structured Streaming 实时统计", includeInAll = false),
     ModuleDefinition("4", "GraphX 图分析", includeInAll = true),
     ModuleDefinition("5", "MLlib 行为预测", includeInAll = true),
-    ModuleDefinition("6", "性能调优与 Benchmark", includeInAll = true)
+    ModuleDefinition("6", "性能调优与 Benchmark", includeInAll = true),
+    ModuleDefinition("7", "数据仓库构建", includeInAll = true)
   )
 
   val MODULE_NAME_BY_ID: Map[String, String] =

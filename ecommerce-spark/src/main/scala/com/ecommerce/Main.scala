@@ -20,7 +20,8 @@ object Main extends Logging {
     "3" -> (() => Module3_Streaming.run()),
     "4" -> (() => Module4_GraphX.run()),
     "5" -> (() => Module5_MLlib.run()),
-    "6" -> (() => Module6_PerformanceTuning.run())
+    "6" -> (() => Module6_PerformanceTuning.run()),
+    "7" -> (() => Module7_DataWarehouse.run())
   )
 
   def main(args: Array[String]): Unit = {
